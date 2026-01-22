@@ -84,15 +84,80 @@ rag.add_documents(FAQ_DATA)
 # ==================== ENDPOINTS ====================
 @app.route('/')
 def home():
-    return jsonify({
-        'status': 'ok',
-        'message': 'RAG Marakame API is running',
-        'endpoints': {
-            '/chat': 'POST - Envoyer un message',
-            '/search': 'POST - Rechercher dans la FAQ',
-            '/health': 'GET - Status'
+    return '''<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test RAG Marakame</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; }
+        .chat-container { background: white; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); width: 100%; max-width: 500px; overflow: hidden; }
+        .chat-header { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; padding: 20px; text-align: center; }
+        .chat-header h1 { font-size: 1.25rem; font-weight: 600; }
+        .chat-header p { font-size: 0.875rem; opacity: 0.9; margin-top: 4px; }
+        .chat-messages { height: 400px; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+        .message { max-width: 85%; padding: 12px 16px; border-radius: 16px; line-height: 1.5; }
+        .message.user { background: #6366f1; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
+        .message.bot { background: #f0f0f0; color: #333; align-self: flex-start; border-bottom-left-radius: 4px; }
+        .message.error { background: #fee2e2; color: #dc2626; }
+        .message.loading { background: #f0f0f0; color: #666; }
+        .chat-input { display: flex; padding: 16px; border-top: 1px solid #eee; gap: 12px; }
+        .chat-input input { flex: 1; padding: 12px 16px; border: 1px solid #ddd; border-radius: 24px; font-size: 1rem; outline: none; }
+        .chat-input input:focus { border-color: #6366f1; }
+        .chat-input button { background: #6366f1; color: white; border: none; padding: 12px 24px; border-radius: 24px; font-size: 1rem; cursor: pointer; font-weight: 500; }
+        .chat-input button:hover { background: #4f46e5; }
+        .chat-input button:disabled { background: #ccc; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>🧵 Marakame Assistant</h1>
+            <p>Testez votre RAG</p>
+        </div>
+        <div class="chat-messages" id="messages">
+            <div class="message bot">Bonjour ! Je suis l\'assistant Marakame. Posez-moi vos questions sur nos bracelets, la livraison, les retours...</div>
+        </div>
+        <div class="chat-input">
+            <input type="text" id="input" placeholder="Votre question..." onkeypress="if(event.key===\'Enter\')sendMessage()">
+            <button onclick="sendMessage()">Envoyer</button>
+        </div>
+    </div>
+    <script>
+        async function sendMessage() {
+            const input = document.getElementById('input');
+            const messages = document.getElementById('messages');
+            const message = input.value.trim();
+            if (!message) return;
+            messages.innerHTML += `<div class="message user">${message}</div>`;
+            input.value = '';
+            const loadingId = Date.now();
+            messages.innerHTML += `<div class="message loading" id="loading-${loadingId}">...</div>`;
+            messages.scrollTop = messages.scrollHeight;
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+                const data = await response.json();
+                document.getElementById(`loading-${loadingId}`).remove();
+                if (data.error) {
+                    messages.innerHTML += `<div class="message error">Erreur: ${data.error}</div>`;
+                } else {
+                    messages.innerHTML += `<div class="message bot">${data.response}</div>`;
+                }
+            } catch (error) {
+                document.getElementById(`loading-${loadingId}`).remove();
+                messages.innerHTML += `<div class="message error">Erreur: ${error.message}</div>`;
+            }
+            messages.scrollTop = messages.scrollHeight;
         }
-    })
+    </script>
+</body>
+</html>'''
 
 @app.route('/health')
 def health():
