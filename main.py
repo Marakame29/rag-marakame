@@ -6,6 +6,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 import requests
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -14,7 +15,7 @@ CORS(app)
 ANTHROPIC_KEY = os.environ.get('ANTHROPIC_API_KEY')
 SHOPIFY_CLIENT_ID = os.environ.get('SHOPIFY_CLIENT_ID')
 SHOPIFY_CLIENT_SECRET = os.environ.get('SHOPIFY_CLIENT_SECRET')
-SHOPIFY_SHOP_URL = os.environ.get('SHOPIFY_SHOP_URL', 'marakame.myshopify.com')
+SHOPIFY_SHOP_URL = os.environ.get('SHOPIFY_SHOP_URL', '792489-4.myshopify.com')
 
 # Token cache
 shopify_token_cache = {
@@ -24,9 +25,6 @@ shopify_token_cache = {
 
 def get_shopify_token():
     """Get a valid Shopify access token, refreshing if needed"""
-    import time
-    
-    # Check if we have a valid cached token
     if shopify_token_cache['access_token'] and time.time() < shopify_token_cache['expires_at'] - 300:
         return shopify_token_cache['access_token']
     
@@ -46,8 +44,6 @@ def get_shopify_token():
             headers={'Content-Type': 'application/x-www-form-urlencoded'},
             timeout=10
         )
-        
-        print(f"DEBUG: Token response status: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
@@ -76,13 +72,13 @@ def log_conversation(user_message, bot_response, language='fr'):
 # ==================== FAQ DATA ====================
 FAQ_DATA = [
     {
-        'content': 'Marakame propose des bracelets artisanaux faits main par des artisans Huichol du Mexique. Chaque bracelet est unique et créé avec des perles de verre traditionnelles selon la technique ancestrale Wixárika.',
-        'content_en': 'Marakame offers handmade artisanal bracelets crafted by Huichol artisans from Mexico. Each bracelet is unique and created with traditional glass beads using the ancestral Wixárika technique.',
-        'content_es': 'Marakame ofrece pulseras artesanales hechas a mano por artesanos Huicholes de México. Cada pulsera es única y creada con cuentas de vidrio tradicionales según la técnica ancestral Wixárika.',
-        'content_de': 'Marakame bietet handgefertigte Armbänder von Huichol-Kunsthandwerkern aus Mexiko. Jedes Armband ist einzigartig und wird mit traditionellen Glasperlen nach der Wixárika-Technik hergestellt.',
-        'content_it': 'Marakame offre braccialetti artigianali fatti a mano da artigiani Huichol del Messico. Ogni braccialetto è unico e creato con perline di vetro tradizionali secondo la tecnica ancestrale Wixárika.',
+        'content': 'Marakame est une boutique suisse proposant des bijoux et accessoires artisanaux faits main. Nos créations incluent des boucles d\'oreilles, bagues, colliers, bracelets Wayuu et sacs Wayuu. Chaque pièce est unique, fabriquée par des artisanes au Mexique ou en Colombie selon le produit (l\'origine est indiquée sur chaque page produit).',
+        'content_en': 'Marakame is a Swiss boutique offering handmade artisanal jewelry and accessories. Our creations include earrings, rings, necklaces, Wayuu bracelets and Wayuu bags. Each piece is unique, made by artisans in Mexico or Colombia depending on the product (origin is indicated on each product page).',
+        'content_es': 'Marakame es una boutique suiza que ofrece joyas y accesorios artesanales hechos a mano. Nuestras creaciones incluyen aretes, anillos, collares, pulseras Wayuu y bolsos Wayuu. Cada pieza es única, fabricada por artesanas en México o Colombia según el producto (el origen se indica en cada página de producto).',
+        'content_de': 'Marakame ist eine Schweizer Boutique für handgefertigten Schmuck und Accessoires. Unsere Kreationen umfassen Ohrringe, Ringe, Halsketten, Wayuu-Armbänder und Wayuu-Taschen. Jedes Stück ist einzigartig, hergestellt von Kunsthandwerkerinnen in Mexiko oder Kolumbien (die Herkunft ist auf jeder Produktseite angegeben).',
+        'content_it': 'Marakame è una boutique svizzera che offre gioielli e accessori artigianali fatti a mano. Le nostre creazioni includono orecchini, anelli, collane, braccialetti Wayuu e borse Wayuu. Ogni pezzo è unico, realizzato da artigiane in Messico o Colombia a seconda del prodotto (l\'origine è indicata su ogni pagina prodotto).',
         'category': 'about',
-        'keywords': ['marakame', 'bracelet', 'huichol', 'artisan', 'mexique', 'wixarika', 'perle']
+        'keywords': ['marakame', 'bijoux', 'jewelry', 'accessoires', 'artisan', 'mexique', 'colombie', 'wayuu', 'boucles', 'bagues', 'colliers']
     },
     {
         'content': 'Livraison en Suisse: gratuite dès 50 CHF, délai de 2-4 jours ouvrables. Livraison internationale (France, Allemagne, etc.): 5-10 jours ouvrables, frais calculés à la commande.',
@@ -112,20 +108,20 @@ FAQ_DATA = [
         'keywords': ['retour', 'return', 'remboursement', 'refund', '30 jours', 'échange']
     },
     {
-        'content': 'Les bracelets Huichol sont fabriqués avec la technique ancestrale du tissage de perles de verre. Chaque motif (peyote, cerf, aigle, soleil) a une signification spirituelle profonde dans la culture Wixárika.',
-        'content_en': 'Huichol bracelets are made using the ancestral glass bead weaving technique. Each pattern (peyote, deer, eagle, sun) has deep spiritual meaning in Wixárika culture.',
-        'content_es': 'Las pulseras Huichol se fabrican con la técnica ancestral del tejido de cuentas de vidrio. Cada motivo (peyote, venado, águila, sol) tiene un significado espiritual profundo en la cultura Wixárika.',
-        'content_de': 'Huichol-Armbänder werden mit der traditionellen Glasperlen-Webtechnik hergestellt. Jedes Muster (Peyote, Hirsch, Adler, Sonne) hat eine tiefe spirituelle Bedeutung.',
-        'content_it': 'I braccialetti Huichol sono realizzati con la tecnica ancestrale della tessitura di perline di vetro. Ogni motivo (peyote, cervo, aquila, sole) ha un profondo significato spirituale.',
+        'content': 'Nos bijoux (boucles d\'oreilles, bagues, colliers) sont fabriqués avec des matériaux de qualité par des artisanes. L\'origine (Mexique ou Colombie) est indiquée sur chaque page produit sous "Made in". Les bracelets et sacs Wayuu sont tissés à la main par des artisanes colombiennes de la communauté Wayuu.',
+        'content_en': 'Our jewelry (earrings, rings, necklaces) is crafted with quality materials by artisans. The origin (Mexico or Colombia) is indicated on each product page under "Made in". Wayuu bracelets and bags are hand-woven by Colombian artisans from the Wayuu community.',
+        'content_es': 'Nuestras joyas (aretes, anillos, collares) están fabricadas con materiales de calidad por artesanas. El origen (México o Colombia) se indica en cada página de producto bajo "Made in". Las pulseras y bolsos Wayuu son tejidos a mano por artesanas colombianas de la comunidad Wayuu.',
+        'content_de': 'Unser Schmuck (Ohrringe, Ringe, Halsketten) wird von Kunsthandwerkerinnen aus hochwertigen Materialien gefertigt. Die Herkunft (Mexiko oder Kolumbien) ist auf jeder Produktseite unter "Made in" angegeben. Wayuu-Armbänder und -Taschen werden von kolumbianischen Kunsthandwerkerinnen der Wayuu-Gemeinschaft handgewebt.',
+        'content_it': 'I nostri gioielli (orecchini, anelli, collane) sono realizzati con materiali di qualità da artigiane. L\'origine (Messico o Colombia) è indicata su ogni pagina prodotto sotto "Made in". I braccialetti e le borse Wayuu sono tessuti a mano da artigiane colombiane della comunità Wayuu.',
         'category': 'produits',
-        'keywords': ['bracelet', 'huichol', 'perle', 'motif', 'peyote', 'cerf', 'aigle', 'soleil', 'wixarika']
+        'keywords': ['bijoux', 'jewelry', 'boucles', 'earrings', 'bagues', 'rings', 'colliers', 'necklaces', 'wayuu', 'sac', 'bag', 'bracelet', 'mexique', 'colombie']
     },
     {
-        'content': 'Entretien des bracelets: évitez le contact prolongé avec l\'eau, les parfums et produits chimiques. Rangez-les à plat dans une pochette pour préserver leur forme.',
-        'content_en': 'Bracelet care: avoid prolonged contact with water, perfumes and chemicals. Store flat in a pouch to preserve their shape.',
-        'content_es': 'Cuidado de las pulseras: evite el contacto prolongado con agua, perfumes y productos químicos. Guárdelas planas en una bolsa.',
-        'content_de': 'Armband-Pflege: Vermeiden Sie längeren Kontakt mit Wasser, Parfüms und Chemikalien. Flach in einem Beutel aufbewahren.',
-        'content_it': 'Cura dei braccialetti: evitare il contatto prolungato con acqua, profumi e prodotti chimici. Conservare in piano in una custodia.',
+        'content': 'Entretien des bijoux: évitez le contact prolongé avec l\'eau, les parfums et produits chimiques. Rangez-les dans une pochette pour préserver leur éclat. Nettoyez délicatement avec un chiffon doux si nécessaire.',
+        'content_en': 'Jewelry care: avoid prolonged contact with water, perfumes and chemicals. Store in a pouch to preserve their shine. Gently clean with a soft cloth if necessary.',
+        'content_es': 'Cuidado de las joyas: evite el contacto prolongado con agua, perfumes y productos químicos. Guárdelas en una bolsa para preservar su brillo. Limpie suavemente con un paño suave si es necesario.',
+        'content_de': 'Schmuckpflege: Vermeiden Sie längeren Kontakt mit Wasser, Parfüms und Chemikalien. In einem Beutel aufbewahren, um den Glanz zu erhalten. Bei Bedarf vorsichtig mit einem weichen Tuch reinigen.',
+        'content_it': 'Cura dei gioielli: evitare il contatto prolungato con acqua, profumi e prodotti chimici. Conservare in una custodia per preservare la lucentezza. Pulire delicatamente con un panno morbido se necessario.',
         'category': 'entretien',
         'keywords': ['entretien', 'care', 'nettoyage', 'eau', 'water', 'rangement']
     },
@@ -274,7 +270,12 @@ def format_order_info(order, language='fr'):
 # ==================== TAIYARI PROMPT ====================
 def get_taiyari_prompt(language, context):
     prompts = {
-        'fr': f"""Tu es Taiyari, l'assistant virtuel de Marakame, une boutique suisse de bracelets artisanaux Huichol du Mexique.
+        'fr': f"""Tu es Taiyari, l'assistant virtuel de Marakame, une boutique suisse de bijoux et accessoires artisanaux.
+
+PRODUITS MARAKAME:
+- Bijoux: boucles d'oreilles, bagues, colliers
+- Accessoires: bracelets Wayuu, sacs Wayuu
+- Fabriqués par des artisanes au Mexique ou en Colombie (voir "Made in" sur chaque page produit)
 
 PERSONNALITÉ:
 - Chaleureux, amical et professionnel
@@ -283,17 +284,23 @@ PERSONNALITÉ:
 - Emojis avec parcimonie (1-2 max)
 - Vouvoie les clients
 
+RÈGLES STRICTES:
+1. NE JAMAIS utiliser le mot "Huichol" - dire "artisanes mexicaines" ou "artisanes colombiennes" selon l'origine
+2. Réponds UNIQUEMENT avec le contexte fourni
+3. Ne jamais inventer d'information
+4. Pour l'origine d'un produit, toujours référer à la page produit (Made in Mexico ou Made in Colombia)
+5. Si pas d'info: "Hmm, je n'ai pas cette information. Souhaitez-vous que notre équipe vous recontacte à info@marakame.ch ?"
+6. Pour les commandes, demande le numéro ou l'email
+
 CONTEXTE:
-{context}
+{context}""",
 
-RÈGLES:
-1. Réponds UNIQUEMENT avec le contexte fourni
-2. Ne jamais inventer d'information
-3. Si pas d'info: "Hmm, je n'ai pas cette information. Souhaitez-vous que notre équipe vous recontacte à info@marakame.ch ?"
-4. Pour les commandes, demande le numéro ou l'email
-5. Reste positif et serviable""",
+        'en': f"""You are Taiyari, the virtual assistant for Marakame, a Swiss boutique selling artisanal jewelry and accessories.
 
-        'en': f"""You are Taiyari, the virtual assistant for Marakame, a Swiss boutique selling handmade Huichol bracelets from Mexico.
+MARAKAME PRODUCTS:
+- Jewelry: earrings, rings, necklaces
+- Accessories: Wayuu bracelets, Wayuu bags
+- Made by artisans in Mexico or Colombia (see "Made in" on each product page)
 
 PERSONALITY:
 - Warm, friendly and professional
@@ -301,59 +308,65 @@ PERSONALITY:
 - Concise and direct (2-3 sentences max)
 - Emojis sparingly (1-2 max)
 
-CONTEXT:
-{context}
+STRICT RULES:
+1. NEVER use the word "Huichol" - say "Mexican artisans" or "Colombian artisans" depending on origin
+2. Answer ONLY with provided context
+3. Never make up information
+4. For product origin, always refer to the product page (Made in Mexico or Made in Colombia)
+5. If no info: "Hmm, I don't have that information. Would you like our team to contact you at info@marakame.ch?"
+6. For orders, ask for number or email
 
-RULES:
-1. Answer ONLY with provided context
-2. Never make up information
-3. If no info: "Hmm, I don't have that information. Would you like our team to contact you at info@marakame.ch?"
-4. For orders, ask for number or email
-5. Stay positive and helpful"""
+CONTEXT:
+{context}"""
     }
     return prompts.get(language, prompts['fr'])
+
+# ==================== LOGO BASE64 ====================
+LOGO_BASE64 = "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"
 
 # ==================== ENDPOINTS ====================
 @app.route('/')
 def home():
-    return '''<!DOCTYPE html>
+    return f'''<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Taiyari - Assistant Marakame</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; }
-        .chat-container { background: white; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); width: 100%; max-width: 420px; overflow: hidden; }
-        .chat-header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: white; padding: 16px 20px; display: flex; align-items: center; gap: 12px; }
-        .logo { width: 45px; height: 45px; background: white; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #1a1a2e; font-size: 14px; }
-        .header-text h1 { font-size: 1.1rem; font-weight: 600; }
-        .header-text p { font-size: 0.75rem; opacity: 0.8; margin-top: 2px; }
-        .chat-messages { height: 420px; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; background: #f8f9fa; }
-        .message { max-width: 85%; padding: 12px 16px; border-radius: 18px; line-height: 1.5; font-size: 0.95rem; animation: fadeIn 0.3s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .message.user { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
-        .message.bot { background: white; color: #333; align-self: flex-start; border-bottom-left-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); display: flex; gap: 10px; align-items: flex-start; }
-        .bot-avatar { width: 28px; height: 28px; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: bold; flex-shrink: 0; }
-        .message.error { background: #fee2e2; color: #dc2626; }
-        .loading-dots { display: flex; gap: 4px; padding: 4px 0; }
-        .loading-dots span { width: 8px; height: 8px; background: #667eea; border-radius: 50%; animation: bounce 1.4s ease-in-out infinite; }
-        .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
-        .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
-        @keyframes bounce { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; } 40% { transform: scale(1); opacity: 1; } }
-        .chat-input { display: flex; padding: 16px; border-top: 1px solid #eee; gap: 10px; background: white; }
-        .chat-input input { flex: 1; padding: 12px 18px; border: 2px solid #e5e7eb; border-radius: 25px; font-size: 0.95rem; outline: none; transition: border-color 0.2s; }
-        .chat-input input:focus { border-color: #667eea; }
-        .chat-input button { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; width: 48px; height: 48px; border-radius: 50%; font-size: 1.2rem; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; display: flex; align-items: center; justify-content: center; }
-        .chat-input button:hover { transform: scale(1.05); box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); }
-        .chat-input button:disabled { background: #ccc; cursor: not-allowed; transform: none; box-shadow: none; }
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; }}
+        .chat-container {{ background: white; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); width: 100%; max-width: 420px; overflow: hidden; }}
+        .chat-header {{ background: white; padding: 16px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #eee; }}
+        .logo {{ width: 50px; height: 50px; }}
+        .logo img {{ width: 100%; height: 100%; object-fit: contain; }}
+        .header-text h1 {{ font-size: 1.1rem; font-weight: 600; color: #1a1a2e; }}
+        .header-text p {{ font-size: 0.75rem; color: #666; margin-top: 2px; }}
+        .chat-messages {{ height: 420px; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; background: #f8f9fa; }}
+        .message {{ max-width: 85%; padding: 12px 16px; border-radius: 18px; line-height: 1.5; font-size: 0.95rem; animation: fadeIn 0.3s ease; }}
+        @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+        .message.user {{ background: linear-gradient(135deg, #2d8f7b 0%, #20b2aa 100%); color: white; align-self: flex-end; border-bottom-right-radius: 4px; }}
+        .message.bot {{ background: white; color: #333; align-self: flex-start; border-bottom-left-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); display: flex; gap: 10px; align-items: flex-start; }}
+        .bot-avatar {{ width: 28px; height: 28px; flex-shrink: 0; }}
+        .bot-avatar img {{ width: 100%; height: 100%; object-fit: contain; }}
+        .message.error {{ background: #fee2e2; color: #dc2626; }}
+        .loading-dots {{ display: flex; gap: 4px; padding: 4px 0; }}
+        .loading-dots span {{ width: 8px; height: 8px; background: #2d8f7b; border-radius: 50%; animation: bounce 1.4s ease-in-out infinite; }}
+        .loading-dots span:nth-child(2) {{ animation-delay: 0.2s; }}
+        .loading-dots span:nth-child(3) {{ animation-delay: 0.4s; }}
+        @keyframes bounce {{ 0%, 80%, 100% {{ transform: scale(0.6); opacity: 0.5; }} 40% {{ transform: scale(1); opacity: 1; }} }}
+        .chat-input {{ display: flex; padding: 16px; border-top: 1px solid #eee; gap: 10px; background: white; }}
+        .chat-input input {{ flex: 1; padding: 12px 18px; border: 2px solid #e5e7eb; border-radius: 25px; font-size: 0.95rem; outline: none; transition: border-color 0.2s; }}
+        .chat-input input:focus {{ border-color: #2d8f7b; }}
+        .chat-input button {{ background: linear-gradient(135deg, #2d8f7b 0%, #20b2aa 100%); color: white; border: none; width: 48px; height: 48px; border-radius: 50%; font-size: 1.2rem; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; display: flex; align-items: center; justify-content: center; }}
+        .chat-input button:hover {{ transform: scale(1.05); box-shadow: 0 4px 15px rgba(45, 143, 123, 0.4); }}
+        .chat-input button:disabled {{ background: #ccc; cursor: not-allowed; transform: none; box-shadow: none; }}
     </style>
 </head>
 <body>
     <div class="chat-container">
         <div class="chat-header">
-            <div class="logo">MK</div>
+            <div class="logo"><img src="data:image/png;base64,{LOGO_BASE64}" alt="Marakame"></div>
             <div class="header-text">
                 <h1>Taiyari</h1>
                 <p>Assistant Marakame</p>
@@ -361,7 +374,7 @@ def home():
         </div>
         <div class="chat-messages" id="messages">
             <div class="message bot">
-                <div class="bot-avatar">T</div>
+                <div class="bot-avatar"><img src="data:image/png;base64,{LOGO_BASE64}" alt="T"></div>
                 <div>Bonjour ! 👋 Je suis Taiyari, votre assistant Marakame. Comment puis-je vous aider ?</div>
             </div>
         </div>
@@ -371,7 +384,8 @@ def home():
         </div>
     </div>
     <script>
-        async function sendMessage() {
+        const LOGO = "data:image/png;base64,{LOGO_BASE64}";
+        async function sendMessage() {{
             const input = document.getElementById('input');
             const messages = document.getElementById('messages');
             const message = input.value.trim();
@@ -379,24 +393,24 @@ def home():
             messages.innerHTML += '<div class="message user">' + escapeHtml(message) + '</div>';
             input.value = '';
             const loadingId = Date.now();
-            messages.innerHTML += '<div class="message bot" id="loading-' + loadingId + '"><div class="bot-avatar">T</div><div class="loading-dots"><span></span><span></span><span></span></div></div>';
+            messages.innerHTML += '<div class="message bot" id="loading-' + loadingId + '"><div class="bot-avatar"><img src="' + LOGO + '" alt="T"></div><div class="loading-dots"><span></span><span></span><span></span></div></div>';
             messages.scrollTop = messages.scrollHeight;
-            try {
-                const response = await fetch('/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+            try {{
+                const response = await fetch('/chat', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ message }}) }});
                 const data = await response.json();
                 document.getElementById('loading-' + loadingId).remove();
-                if (data.error) {
+                if (data.error) {{
                     messages.innerHTML += '<div class="message error">Erreur: ' + escapeHtml(data.error) + '</div>';
-                } else {
-                    messages.innerHTML += '<div class="message bot"><div class="bot-avatar">T</div><div>' + escapeHtml(data.response) + '</div></div>';
-                }
-            } catch (error) {
+                }} else {{
+                    messages.innerHTML += '<div class="message bot"><div class="bot-avatar"><img src="' + LOGO + '" alt="T"></div><div>' + escapeHtml(data.response) + '</div></div>';
+                }}
+            }} catch (error) {{
                 document.getElementById('loading-' + loadingId).remove();
                 messages.innerHTML += '<div class="message error">Erreur de connexion.</div>';
-            }
+            }}
             messages.scrollTop = messages.scrollHeight;
-        }
-        function escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
+        }}
+        function escapeHtml(text) {{ const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }}
     </script>
 </body>
 </html>'''
