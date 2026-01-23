@@ -12,8 +12,55 @@ CORS(app)
 
 # ==================== CONFIGURATION ====================
 ANTHROPIC_KEY = os.environ.get('ANTHROPIC_API_KEY')
-SHOPIFY_ACCESS_TOKEN = os.environ.get('SHOPIFY_ACCESS_TOKEN')
+SHOPIFY_CLIENT_ID = os.environ.get('SHOPIFY_CLIENT_ID')
+SHOPIFY_CLIENT_SECRET = os.environ.get('SHOPIFY_CLIENT_SECRET')
 SHOPIFY_SHOP_URL = os.environ.get('SHOPIFY_SHOP_URL', 'marakame.myshopify.com')
+
+# Token cache
+shopify_token_cache = {
+    'access_token': None,
+    'expires_at': 0
+}
+
+def get_shopify_token():
+    """Get a valid Shopify access token, refreshing if needed"""
+    import time
+    
+    # Check if we have a valid cached token
+    if shopify_token_cache['access_token'] and time.time() < shopify_token_cache['expires_at'] - 300:
+        return shopify_token_cache['access_token']
+    
+    if not SHOPIFY_CLIENT_ID or not SHOPIFY_CLIENT_SECRET:
+        print("DEBUG: Missing SHOPIFY_CLIENT_ID or SHOPIFY_CLIENT_SECRET")
+        return None
+    
+    try:
+        print("DEBUG: Requesting new Shopify access token...")
+        response = requests.post(
+            f'https://{SHOPIFY_SHOP_URL}/admin/oauth/access_token',
+            data={
+                'grant_type': 'client_credentials',
+                'client_id': SHOPIFY_CLIENT_ID,
+                'client_secret': SHOPIFY_CLIENT_SECRET
+            },
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=10
+        )
+        
+        print(f"DEBUG: Token response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            shopify_token_cache['access_token'] = data['access_token']
+            shopify_token_cache['expires_at'] = time.time() + data.get('expires_in', 86399)
+            print("DEBUG: Got new Shopify token successfully")
+            return data['access_token']
+        else:
+            print(f"DEBUG: Token error: {response.text}")
+            return None
+    except Exception as e:
+        print(f"DEBUG: Token exception: {e}")
+        return None
 
 # ==================== CONVERSATION STORAGE ====================
 conversations = []
@@ -169,15 +216,15 @@ rag.add_documents(FAQ_DATA)
 
 # ==================== SHOPIFY ====================
 def get_shopify_order(order_id_or_email):
-    if not SHOPIFY_ACCESS_TOKEN:
-        print("DEBUG: No SHOPIFY_ACCESS_TOKEN configured")
+    token = get_shopify_token()
+    if not token:
+        print("DEBUG: Could not get Shopify token")
         return None
     
     print(f"DEBUG: Searching for order: {order_id_or_email}")
-    print(f"DEBUG: Shop URL: {SHOPIFY_SHOP_URL}")
     
     headers = {
-        'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
+        'X-Shopify-Access-Token': token,
         'Content-Type': 'application/json'
     }
     
@@ -191,7 +238,6 @@ def get_shopify_order(order_id_or_email):
         print(f"DEBUG: Calling URL: {url}")
         response = requests.get(url, headers=headers, timeout=10)
         print(f"DEBUG: Response status: {response.status_code}")
-        print(f"DEBUG: Response body: {response.text[:500]}")
         
         if response.status_code == 200:
             data = response.json()
@@ -201,7 +247,7 @@ def get_shopify_order(order_id_or_email):
             else:
                 print("DEBUG: No orders found in response")
         else:
-            print(f"DEBUG: Error response: {response.text}")
+            print(f"DEBUG: Error response: {response.text[:200]}")
     except Exception as e:
         print(f"DEBUG: Shopify exception: {e}")
     return None
