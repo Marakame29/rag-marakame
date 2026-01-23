@@ -170,7 +170,11 @@ rag.add_documents(FAQ_DATA)
 # ==================== SHOPIFY ====================
 def get_shopify_order(order_id_or_email):
     if not SHOPIFY_ACCESS_TOKEN:
+        print("DEBUG: No SHOPIFY_ACCESS_TOKEN configured")
         return None
+    
+    print(f"DEBUG: Searching for order: {order_id_or_email}")
+    print(f"DEBUG: Shop URL: {SHOPIFY_SHOP_URL}")
     
     headers = {
         'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
@@ -184,13 +188,22 @@ def get_shopify_order(order_id_or_email):
             order_num = order_id_or_email.replace('#', '').replace('MK', '').strip()
             url = f'https://{SHOPIFY_SHOP_URL}/admin/api/2024-01/orders.json?name=%23{order_num}&status=any'
         
+        print(f"DEBUG: Calling URL: {url}")
         response = requests.get(url, headers=headers, timeout=10)
+        print(f"DEBUG: Response status: {response.status_code}")
+        print(f"DEBUG: Response body: {response.text[:500]}")
+        
         if response.status_code == 200:
             data = response.json()
             if data.get('orders'):
+                print(f"DEBUG: Found {len(data['orders'])} orders")
                 return data['orders'][0]
+            else:
+                print("DEBUG: No orders found in response")
+        else:
+            print(f"DEBUG: Error response: {response.text}")
     except Exception as e:
-        print(f"Shopify error: {e}")
+        print(f"DEBUG: Shopify exception: {e}")
     return None
 
 def format_order_info(order, language='fr'):
