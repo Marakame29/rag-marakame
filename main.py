@@ -401,7 +401,7 @@ def check_session_timeout(session_id):
 
 # ==================== EMAIL FUNCTIONS ====================
 def send_email(to_email, subject, body_html):
-    """Send email via SMTP Namecheap"""
+    """Send email via SMTP Namecheap - using SSL on port 465"""
     print(f"DEBUG EMAIL: === Starting send_email ===")
     print(f"DEBUG EMAIL: To: {to_email}")
     print(f"DEBUG EMAIL: SMTP_HOST: {SMTP_HOST}")
@@ -423,15 +423,20 @@ def send_email(to_email, subject, body_html):
         html_part = MIMEText(body_html, 'html', 'utf-8')
         msg.attach(html_part)
         
-        print(f"DEBUG EMAIL: Connecting to {SMTP_HOST}:{SMTP_PORT}...")
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
-        print("DEBUG EMAIL: Connected!")
+        # Try SSL first (port 465), then TLS (port 587)
+        port = int(SMTP_PORT)
         
-        print("DEBUG EMAIL: Starting TLS...")
-        server.starttls()
-        print("DEBUG EMAIL: TLS OK!")
+        if port == 465:
+            print(f"DEBUG EMAIL: Using SMTP_SSL on port 465...")
+            import ssl
+            context = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(SMTP_HOST, 465, timeout=30, context=context)
+        else:
+            print(f"DEBUG EMAIL: Using SMTP with STARTTLS on port {port}...")
+            server = smtplib.SMTP(SMTP_HOST, port, timeout=30)
+            server.starttls()
         
-        print(f"DEBUG EMAIL: Logging in as {SMTP_USER}...")
+        print(f"DEBUG EMAIL: Connected! Logging in as {SMTP_USER}...")
         server.login(SMTP_USER, SMTP_PASSWORD)
         print("DEBUG EMAIL: Login OK!")
         
@@ -451,6 +456,9 @@ def send_email(to_email, subject, body_html):
         return False
     except smtplib.SMTPException as e:
         print(f"DEBUG EMAIL: SMTP ERROR: {e}")
+        return False
+    except TimeoutError as e:
+        print(f"DEBUG EMAIL: TIMEOUT ERROR - Server not responding: {e}")
         return False
     except Exception as e:
         print(f"DEBUG EMAIL: GENERAL ERROR - {type(e).__name__}: {e}")
