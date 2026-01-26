@@ -230,29 +230,48 @@ def get_hubspot_emails(email):
         print(f"DEBUG: HubSpot emails association status: {response.status_code}")
         
         if response.status_code != 200:
+            print(f"DEBUG: HubSpot association error: {response.text}")
             return []
         
         associations = response.json().get('results', [])
+        print(f"DEBUG: Found {len(associations)} email associations")
+        
         if not associations:
             return []
         
-        # Get email details
+        # Get email details with all properties
         emails = []
         for assoc in associations[:5]:  # Limit to 5 most recent
-            email_id = assoc['id']
-            email_url = f"https://api.hubapi.com/crm/v3/objects/emails/{email_id}"
+            email_id = assoc.get('id') or assoc.get('toObjectId')
+            if not email_id:
+                continue
+                
+            email_url = f"https://api.hubapi.com/crm/v3/objects/emails/{email_id}?properties=hs_email_subject,hs_email_text,hs_email_html,hs_email_body,hs_timestamp,hs_email_direction,hs_body_preview"
             email_response = requests.get(email_url, headers=headers, timeout=10)
+            
+            print(f"DEBUG: Email {email_id} fetch status: {email_response.status_code}")
             
             if email_response.status_code == 200:
                 email_data = email_response.json()
                 props = email_data.get('properties', {})
+                print(f"DEBUG: Email properties: {list(props.keys())}")
+                
+                # Try multiple fields for body content
+                body = props.get('hs_email_text') or props.get('hs_email_html') or props.get('hs_email_body') or props.get('hs_body_preview') or ''
+                
+                # Clean HTML if present
+                if '<' in body and '>' in body:
+                    body = re.sub(r'<[^>]+>', ' ', body)
+                    body = re.sub(r'\s+', ' ', body).strip()
+                
                 emails.append({
                     'subject': props.get('hs_email_subject', 'Sans sujet'),
-                    'body': props.get('hs_email_text', props.get('hs_email_html', '')),
+                    'body': body[:500] if body else 'Contenu non disponible',
                     'date': props.get('hs_timestamp', ''),
                     'direction': props.get('hs_email_direction', '')
                 })
         
+        print(f"DEBUG: Retrieved {len(emails)} emails with content")
         return emails
     except Exception as e:
         print(f"DEBUG: HubSpot emails error: {e}")
