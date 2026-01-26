@@ -4,7 +4,7 @@ import anthropic
 import os
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import time
 import smtplib
@@ -12,6 +12,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import uuid
 import threading
+import json
+from urllib.parse import urljoin, urlparse
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'marakame-taiyari-secret-2024')
@@ -31,9 +33,323 @@ SMTP_USER = os.environ.get('SMTP_USER', 'hello@marakame.ch')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
 SMTP_FROM = os.environ.get('SMTP_FROM', 'info@marakame.ch')
 
+# Website to scrape
+WEBSITE_URL = 'https://marakame.ch'
+
 # Session timeout settings
-TIMEOUT_WARNING = 5 * 60  # 5 minutes
-TIMEOUT_CLOSE = 10 * 60   # 10 minutes
+TIMEOUT_WARNING = 5 * 60
+TIMEOUT_CLOSE = 10 * 60
+
+# ==================== DYNAMIC RAG ====================
+class DynamicRAG:
+    def __init__(self):
+        self.documents = []
+        self.index = defaultdict(list)
+        self.last_update = None
+        self.update_interval = 3600  # 1 hour
+        self.is_updating = False
+    
+    def needs_update(self):
+        if self.last_update is None:
+            return True
+        return (datetime.now() - self.last_update).total_seconds() > self.update_interval
+    
+    def _tokenize(self, text):
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', ' ', text)
+        return [w for w in text.split() if len(w) > 2]
+    
+    def _extract_text_from_html(self, html):
+        """Extract clean text from HTML"""
+        # Remove script and style elements
+        html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r'<nav[^>]*>.*?</nav>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r'<footer[^>]*>.*?</footer>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r'<header[^>]*>.*?</header>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        # Remove HTML tags
+        text = re.sub(r'<[^>]+>', ' ', html)
+        # Clean up whitespace
+        text = re.sub(r'\s+', ' ', text)
+        # Remove common navigation text
+        noise_patterns = [
+            r'Ignorer et passer au contenu',
+            r'Livraison gratuite.*?CHF \d+',
+            r'Pays/région.*?Langue',
+            r'Rechercher.*?Connexion',
+            r'Article ajouté au panier',
+            r'Procéder au paiement',
+            r'Continuer les achats',
+            r'© \d{4}.*?Shopify',
+            r'Moyens de paiement.*?Visa',
+        ]
+        for pattern in noise_patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE | re.DOTALL)
+        return text.strip()
+    
+    def _get_page_title(self, html):
+        """Extract page title"""
+        match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
+        if match:
+            title = match.group(1).split('–')[0].split('|')[0].strip()
+            return title
+        return ""
+    
+    def scrape_website(self):
+        """Scrape all pages from marakame.ch"""
+        print("DEBUG RAG: Starting website scrape...")
+        documents = []
+        visited = set()
+        to_visit = [WEBSITE_URL]
+        
+        # Key pages to definitely scrape
+        key_pages = [
+            '/pages/faq',
+            '/pages/histoire',
+            '/pages/ou-nous-trouver',
+            '/collections/artisanat-wayuu',
+            '/collections/boucles-doreilles',
+            '/collections/bagues-ajustables',
+            '/collections/mexique',
+            '/collections/colombie',
+            '/policies/refund-policy',
+            '/policies/shipping-policy',
+        ]
+        for page in key_pages:
+            to_visit.append(urljoin(WEBSITE_URL, page))
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; TaiyariBot/1.0; +https://marakame.ch)'
+        }
+        
+        while to_visit and len(visited) < 50:  # Limit to 50 pages
+            url = to_visit.pop(0)
+            
+            # Normalize URL
+            parsed = urlparse(url)
+            if parsed.netloc and 'marakame.ch' not in parsed.netloc:
+                continue
+            url = url.split('?')[0].split('#')[0]
+            
+            if url in visited:
+                continue
+            
+            # Skip certain URLs
+            skip_patterns = ['/account', '/cart', '/checkout', '/cdn/', '.jpg', '.png', '.gif', '.css', '.js']
+            if any(p in url.lower() for p in skip_patterns):
+                continue
+            
+            visited.add(url)
+            
+            try:
+                response = requests.get(url, headers=headers, timeout=10)
+                if response.status_code != 200:
+                    continue
+                
+                html = response.text
+                title = self._get_page_title(html)
+                content = self._extract_text_from_html(html)
+                
+                if len(content) > 100:  # Only add pages with substantial content
+                    # Determine category
+                    category = 'general'
+                    if '/faq' in url:
+                        category = 'faq'
+                    elif '/collections/' in url or '/products/' in url:
+                        category = 'produits'
+                    elif '/histoire' in url:
+                        category = 'histoire'
+                    elif '/policies/' in url:
+                        category = 'politique'
+                    
+                    documents.append({
+                        'content': content[:3000],  # Limit content size
+                        'url': url,
+                        'title': title,
+                        'category': category,
+                        'source': 'website'
+                    })
+                    print(f"DEBUG RAG: Scraped {url} ({len(content)} chars)")
+                
+                # Find more links
+                links = re.findall(r'href=["\']([^"\']+)["\']', html)
+                for link in links:
+                    full_url = urljoin(url, link)
+                    if 'marakame.ch' in full_url and full_url not in visited:
+                        to_visit.append(full_url)
+                
+            except Exception as e:
+                print(f"DEBUG RAG: Error scraping {url}: {e}")
+        
+        print(f"DEBUG RAG: Website scrape complete. {len(documents)} pages scraped.")
+        return documents
+    
+    def scrape_shopify_products(self):
+        """Scrape products from Shopify"""
+        print("DEBUG RAG: Starting Shopify scrape...")
+        documents = []
+        
+        token = get_shopify_token()
+        if not token:
+            print("DEBUG RAG: No Shopify token available")
+            return documents
+        
+        headers = {
+            'X-Shopify-Access-Token': token,
+            'Content-Type': 'application/json'
+        }
+        
+        try:
+            # Get all products
+            url = f'https://{SHOPIFY_SHOP_URL}/admin/api/2024-01/products.json?limit=250'
+            response = requests.get(url, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                products = response.json().get('products', [])
+                print(f"DEBUG RAG: Found {len(products)} Shopify products")
+                
+                for product in products:
+                    title = product.get('title', '')
+                    description = product.get('body_html', '')
+                    # Clean HTML from description
+                    description = re.sub(r'<[^>]+>', ' ', description)
+                    description = re.sub(r'\s+', ' ', description).strip()
+                    
+                    product_type = product.get('product_type', '')
+                    vendor = product.get('vendor', '')
+                    tags = ', '.join(product.get('tags', []))
+                    
+                    # Get price from first variant
+                    variants = product.get('variants', [])
+                    price = variants[0].get('price', '') if variants else ''
+                    
+                    # Get product URL
+                    handle = product.get('handle', '')
+                    product_url = f"https://marakame.ch/products/{handle}"
+                    
+                    content = f"""Produit: {title}
+Description: {description}
+Type: {product_type}
+Prix: {price} CHF
+Tags: {tags}
+Disponible sur: {product_url}"""
+                    
+                    documents.append({
+                        'content': content,
+                        'url': product_url,
+                        'title': title,
+                        'category': 'produit',
+                        'source': 'shopify',
+                        'price': price
+                    })
+            else:
+                print(f"DEBUG RAG: Shopify API error: {response.status_code}")
+        
+        except Exception as e:
+            print(f"DEBUG RAG: Shopify scrape error: {e}")
+        
+        print(f"DEBUG RAG: Shopify scrape complete. {len(documents)} products.")
+        return documents
+    
+    def add_documents(self, docs):
+        """Add documents to the index"""
+        for doc in docs:
+            doc_id = len(self.documents)
+            self.documents.append(doc)
+            
+            # Index by words
+            words = self._tokenize(doc['content'])
+            for word in set(words):
+                self.index[word].append(doc_id)
+            
+            # Index by title words
+            if doc.get('title'):
+                for word in self._tokenize(doc['title']):
+                    self.index[word].append(doc_id)
+    
+    def update(self):
+        """Update the RAG with fresh data"""
+        if self.is_updating:
+            print("DEBUG RAG: Update already in progress")
+            return
+        
+        self.is_updating = True
+        print("DEBUG RAG: Starting full RAG update...")
+        
+        try:
+            # Clear existing data
+            self.documents = []
+            self.index = defaultdict(list)
+            
+            # Scrape website
+            website_docs = self.scrape_website()
+            self.add_documents(website_docs)
+            
+            # Scrape Shopify
+            shopify_docs = self.scrape_shopify_products()
+            self.add_documents(shopify_docs)
+            
+            self.last_update = datetime.now()
+            print(f"DEBUG RAG: Update complete. Total documents: {len(self.documents)}")
+        
+        except Exception as e:
+            print(f"DEBUG RAG: Update error: {e}")
+        
+        finally:
+            self.is_updating = False
+    
+    def search(self, query, top_k=5):
+        """Search the RAG"""
+        # Check if update needed
+        if self.needs_update():
+            # Run update in background
+            threading.Thread(target=self.update).start()
+            # If no documents yet, wait a bit for initial load
+            if not self.documents:
+                time.sleep(2)
+        
+        if not self.documents:
+            return []
+        
+        query_words = self._tokenize(query)
+        scores = defaultdict(float)
+        
+        for word in query_words:
+            if word in self.index:
+                for doc_id in self.index[word]:
+                    scores[doc_id] += 1
+        
+        # Boost scores for certain categories based on query
+        query_lower = query.lower()
+        for doc_id, score in list(scores.items()):
+            doc = self.documents[doc_id]
+            # Boost product results for product-related queries
+            if any(w in query_lower for w in ['prix', 'price', 'coût', 'combien', 'acheter', 'buy']):
+                if doc.get('source') == 'shopify':
+                    scores[doc_id] *= 1.5
+            # Boost FAQ for question words
+            if any(w in query_lower for w in ['comment', 'pourquoi', 'quand', 'how', 'why', 'when']):
+                if doc.get('category') == 'faq':
+                    scores[doc_id] *= 1.3
+        
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        results = []
+        
+        for doc_id, score in ranked[:top_k]:
+            doc = self.documents[doc_id]
+            results.append({
+                'content': doc['content'],
+                'url': doc.get('url', ''),
+                'title': doc.get('title', ''),
+                'category': doc.get('category', ''),
+                'source': doc.get('source', ''),
+                'score': score
+            })
+        
+        return results
+
+# Initialize RAG
+rag = DynamicRAG()
 
 # ==================== SESSION STORAGE ====================
 sessions = {}
@@ -69,7 +385,6 @@ def check_session_timeout(session_id):
     
     if elapsed >= TIMEOUT_CLOSE:
         session_data['closed'] = True
-        # Send email in background thread
         threading.Thread(target=send_conversation_copy, args=(session_id,)).start()
         return {
             'type': 'closed',
@@ -86,13 +401,20 @@ def check_session_timeout(session_id):
 
 # ==================== EMAIL FUNCTIONS ====================
 def send_email(to_email, subject, body_html):
-    """Send email via SMTP"""
+    """Send email via SMTP Namecheap"""
+    print(f"DEBUG EMAIL: === Starting send_email ===")
+    print(f"DEBUG EMAIL: To: {to_email}")
+    print(f"DEBUG EMAIL: SMTP_HOST: {SMTP_HOST}")
+    print(f"DEBUG EMAIL: SMTP_PORT: {SMTP_PORT}")
+    print(f"DEBUG EMAIL: SMTP_USER: {SMTP_USER}")
+    print(f"DEBUG EMAIL: SMTP_PASSWORD set: {bool(SMTP_PASSWORD)}")
+    print(f"DEBUG EMAIL: SMTP_FROM: {SMTP_FROM}")
+    
     if not SMTP_PASSWORD:
-        print("DEBUG: SMTP_PASSWORD not configured")
+        print("DEBUG EMAIL: ERROR - SMTP_PASSWORD is not configured!")
         return False
     
     try:
-        print(f"DEBUG: Attempting to send email to {to_email}")
         msg = MIMEMultipart('alternative')
         msg['Subject'] = subject
         msg['From'] = f"Marakame <{SMTP_FROM}>"
@@ -101,15 +423,37 @@ def send_email(to_email, subject, body_html):
         html_part = MIMEText(body_html, 'html', 'utf-8')
         msg.attach(html_part)
         
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_FROM, to_email, msg.as_string())
+        print(f"DEBUG EMAIL: Connecting to {SMTP_HOST}:{SMTP_PORT}...")
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
+        print("DEBUG EMAIL: Connected!")
         
-        print(f"DEBUG: Email sent successfully to {to_email}")
+        print("DEBUG EMAIL: Starting TLS...")
+        server.starttls()
+        print("DEBUG EMAIL: TLS OK!")
+        
+        print(f"DEBUG EMAIL: Logging in as {SMTP_USER}...")
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        print("DEBUG EMAIL: Login OK!")
+        
+        print(f"DEBUG EMAIL: Sending email...")
+        server.sendmail(SMTP_FROM, to_email, msg.as_string())
+        print("DEBUG EMAIL: Send OK!")
+        
+        server.quit()
+        print(f"DEBUG EMAIL: === SUCCESS - Email sent to {to_email} ===")
         return True
+        
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"DEBUG EMAIL: AUTHENTICATION ERROR - Wrong username/password: {e}")
+        return False
+    except smtplib.SMTPConnectError as e:
+        print(f"DEBUG EMAIL: CONNECTION ERROR - Cannot connect to server: {e}")
+        return False
+    except smtplib.SMTPException as e:
+        print(f"DEBUG EMAIL: SMTP ERROR: {e}")
+        return False
     except Exception as e:
-        print(f"DEBUG: Email error: {e}")
+        print(f"DEBUG EMAIL: GENERAL ERROR - {type(e).__name__}: {e}")
         return False
 
 def format_conversation_html(session_data):
@@ -149,24 +493,29 @@ def format_conversation_html(session_data):
     """
 
 def send_conversation_copy(session_id):
-    """Send conversation copy to info@marakame.ch and visitor if email provided"""
+    """Send conversation copy to info@marakame.ch and visitor"""
+    print(f"DEBUG: send_conversation_copy called for session {session_id}")
+    
     if session_id not in sessions:
+        print(f"DEBUG: Session {session_id} not found")
         return
     
     session_data = sessions[session_id]
     if not session_data['messages']:
+        print("DEBUG: No messages in session")
         return
     
     html_content = format_conversation_html(session_data)
     subject = f"Conversation Taiyari - {session_data['started_at'][:10]}"
     
     # Send to info@marakame.ch
+    print("DEBUG: Sending to info@marakame.ch...")
     send_email('info@marakame.ch', subject, html_content)
     
     # Send to visitor if email provided
     if session_data.get('visitor_email'):
-        visitor_subject = "Copie de votre conversation avec Marakame"
-        send_email(session_data['visitor_email'], visitor_subject, html_content)
+        print(f"DEBUG: Sending to visitor {session_data['visitor_email']}...")
+        send_email(session_data['visitor_email'], "Copie de votre conversation avec Marakame", html_content)
 
 # ==================== HUBSPOT FUNCTIONS ====================
 def search_hubspot_contact(email):
@@ -221,13 +570,11 @@ def get_hubspot_emails(email):
         }
         
         response = requests.get(url, headers=headers, timeout=10)
-        print(f"DEBUG: HubSpot emails association status: {response.status_code}")
         
         if response.status_code != 200:
             return []
         
         associations = response.json().get('results', [])
-        print(f"DEBUG: Found {len(associations)} email associations")
         
         if not associations:
             return []
@@ -237,8 +584,8 @@ def get_hubspot_emails(email):
             email_id = assoc.get('id') or assoc.get('toObjectId')
             if not email_id:
                 continue
-                
-            email_url = f"https://api.hubapi.com/crm/v3/objects/emails/{email_id}?properties=hs_email_subject,hs_email_text,hs_email_html,hs_email_body,hs_timestamp,hs_email_direction,hs_body_preview"
+            
+            email_url = f"https://api.hubapi.com/crm/v3/objects/emails/{email_id}?properties=hs_email_subject,hs_email_text,hs_email_html,hs_body_preview,hs_timestamp,hs_email_direction"
             email_response = requests.get(email_url, headers=headers, timeout=10)
             
             if email_response.status_code == 200:
@@ -259,7 +606,6 @@ def get_hubspot_emails(email):
                     'firstname': firstname
                 })
         
-        print(f"DEBUG: Retrieved {len(emails)} emails")
         return emails
     except Exception as e:
         print(f"DEBUG: HubSpot emails error: {e}")
@@ -296,227 +642,6 @@ def get_shopify_token():
         print(f"DEBUG: Shopify token error: {e}")
     return None
 
-# ==================== FAQ DATA - COMPLETE FROM MARAKAME.CH ====================
-FAQ_DATA = [
-    # === ABOUT ===
-    {
-        'content': 'Marakame est une boutique suisse proposant des bijoux et accessoires artisanaux faits main. Nos créations incluent des boucles d\'oreilles, bagues, colliers, bracelets Wayuu et sacs Wayuu. Chaque pièce est unique, fabriquée par des artisanes au Mexique ou en Colombie (l\'origine est indiquée sur chaque page produit sous "Made in").',
-        'category': 'about',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['marakame', 'bijoux', 'accessoires', 'artisan', 'mexique', 'colombie', 'wayuu', 'boutique', 'suisse']
-    },
-    # === COMMANDE ET SUIVI ===
-    {
-        'content': 'Une fois votre commande validée, vous recevez un e-mail de confirmation. Dès que votre commande est expédiée, un e-mail contenant les informations de suivi vous est envoyé.',
-        'category': 'commande',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['commande', 'suivi', 'confirmation', 'email', 'expédition', 'où en est']
-    },
-    {
-        'content': 'Lorsque votre commande est expédiée, un lien de suivi vous est communiqué par e-mail afin de suivre l\'acheminement de votre colis en temps réel.',
-        'category': 'commande',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['suivi', 'livraison', 'tracking', 'colis', 'temps réel']
-    },
-    {
-        'content': 'Les commandes peuvent être modifiées ou annulées dans un délai de 12 à 24 heures après validation, tant qu\'elles n\'ont pas encore été expédiées. Contactez-nous rapidement par e-mail à info@marakame.ch.',
-        'category': 'commande',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['modifier', 'annuler', 'commande', 'annulation', 'modification']
-    },
-    # === LIVRAISON ===
-    {
-        'content': 'Les commandes sont généralement préparées sous 1 à 3 jours ouvrables. Délais de livraison: Suisse: 2 à 5 jours ouvrables. International (France, Belgique, Espagne, etc.): 5 à 10 jours ouvrables.',
-        'category': 'livraison',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['délai', 'livraison', 'jours', 'suisse', 'international', 'france', 'belgique']
-    },
-    {
-        'content': 'Oui, nous livrons en Suisse ainsi que dans plusieurs pays à l\'international. Les options disponibles s\'affichent lors du passage en caisse.',
-        'category': 'livraison',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['livraison', 'international', 'pays', 'suisse']
-    },
-    {
-        'content': 'La livraison est gratuite en Suisse dès CHF 80.– d\'achat. En dessous de ce montant ou pour les livraisons internationales, les frais sont calculés automatiquement lors du paiement.',
-        'category': 'livraison',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['frais', 'livraison', 'gratuit', 'gratuite', '80', 'chf', 'prix']
-    },
-    {
-        'content': 'Si un article présente un défaut ou un dommage à la réception, veuillez nous contacter dans les 48 heures avec des photos du bijou concerné à info@marakame.ch. Nous procéderons à une analyse et proposerons, selon le cas, un échange, une réparation ou un remboursement.',
-        'category': 'livraison',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['endommagé', 'défaut', 'dommage', 'cassé', 'abîmé', 'réception']
-    },
-    # === MATÉRIAUX ET PRODUITS ===
-    {
-        'content': 'Oui, tous les bijoux Marakame sont faits à la main par des artisanes, avec soin et attention aux détails.',
-        'category': 'produits',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['fait main', 'handmade', 'artisanal', 'artisane']
-    },
-    {
-        'content': '''Les matériaux varient selon les créations: plaqué or, bronze, acier inoxydable, perles Miyuki, pierres naturelles, etc. Les détails précis sont indiqués sur chaque fiche produit.
-
-Perles Miyuki: Petites perles en verre uniformes japonaises, souvent aux couleurs vives et à la finition brillante, idéales pour le tissage.
-
-Perles de verre/tchèques: Perles en verre de formes variées, souvent colorées et transparentes, avec un fini lisse et brillant. Fabriquées en République tchèque.
-
-Lapis lazuli: Pierre précieuse bleu profond avec des inclusions dorées de pyrite. Associée à la sagesse et à la vérité.
-
-Jade: Pierre verte (peut varier du blanc au violet), avec un éclat doux. Symbolise la pureté et l'harmonie.
-
-Citrine: Pierre jaune doré à orange, transparente. Représente l'abondance et la créativité.
-
-Corail rouge: Pierre rouge à rouge orangé. Symbolise la vitalité et la protection.
-
-Onyx: Pierre noir profond. Associée à la force et à la stabilité émotionnelle.''',
-        'category': 'materiaux',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['matériau', 'matériaux', 'material', 'plaqué or', 'bronze', 'acier', 'perle', 'miyuki', 'pierre', 'lapis', 'jade', 'citrine', 'corail', 'onyx', 'verre', 'tchèque']
-    },
-    {
-        'content': 'Nos bijoux sont sélectionnés pour être confortables au quotidien. La majorité est sans nickel, mais en cas d\'allergie spécifique à certains matériaux, nous conseillons de consulter la description du produit ou de nous contacter à info@marakame.ch.',
-        'category': 'produits',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['hypoallergénique', 'allergie', 'nickel', 'sensible', 'peau']
-    },
-    {
-        'content': 'Pour préserver la qualité et la durabilité des bijoux, nous recommandons d\'éviter le contact avec l\'eau, le parfum, les lotions et la transpiration excessive.',
-        'category': 'entretien',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['eau', 'water', 'résistant', 'parfum', 'quotidien', 'douche', 'bain']
-    },
-    # === TAILLES ===
-    {
-        'content': 'Les dimensions et informations de taille sont indiquées sur chaque fiche produit. Certaines bagues sont ajustables pour plus de flexibilité.',
-        'category': 'taille',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['taille', 'dimension', 'ajustable', 'mesure', 'bague', 'bracelet']
-    },
-    {
-        'content': 'Si la taille ne convient pas, contactez-nous dans les 14 jours suivant la réception à info@marakame.ch afin de trouver une solution (échange ou retour).',
-        'category': 'taille',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['taille', 'convient pas', 'échange', 'retour', 'trop grand', 'trop petit']
-    },
-    {
-        'content': 'Oui, les échanges sont possibles sous réserve de disponibilité et à condition que le bijou n\'ait pas été porté ou endommagé.',
-        'category': 'retours',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['échange', 'échanger', 'autre modèle', 'autre taille']
-    },
-    # === RETOURS ET REMBOURSEMENTS ===
-    {
-        'content': 'Les retours sont acceptés dans un délai de 14 jours après réception. Les bijoux doivent être non portés et dans leur emballage d\'origine. Le remboursement est effectué après réception et vérification du produit.',
-        'category': 'retours',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['retour', 'retourner', 'remboursement', 'rembourser', '14 jours', 'politique']
-    },
-    {
-        'content': 'Si vous recevez un bijou endommagé ou incorrect, contactez-nous dès réception avec une photo du produit concerné à info@marakame.ch. Nous vous proposerons un remplacement ou un remboursement.',
-        'category': 'retours',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['endommagé', 'incorrect', 'erreur', 'mauvais', 'cassé']
-    },
-    # === ENTRETIEN ===
-    {
-        'content': 'Rangez vos bijoux à l\'abri de l\'humidité, évitez le contact avec les liquides et nettoyez-les délicatement avec un chiffon doux.',
-        'category': 'entretien',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['entretien', 'entretenir', 'nettoyer', 'ranger', 'conserver', 'préserver', 'chiffon']
-    },
-    # === PAIEMENT ===
-    {
-        'content': 'Nous acceptons les principales cartes de crédit (Visa, Mastercard, American Express), ainsi que Google Pay, Apple Pay, PayPal.',
-        'category': 'paiement',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['paiement', 'carte', 'visa', 'mastercard', 'paypal', 'apple pay', 'google pay', 'payer']
-    },
-    {
-        'content': 'Oui, toutes les transactions sont sécurisées via des systèmes de paiement cryptés conformes aux standards de sécurité.',
-        'category': 'paiement',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['sécurisé', 'sécurité', 'paiement', 'crypté', 'sûr']
-    },
-    # === CADEAUX ===
-    {
-        'content': 'Oui, nos bijoux sont soigneusement emballés et peuvent être offerts directement. N\'hésitez pas à nous contacter pour une demande spéciale à info@marakame.ch.',
-        'category': 'cadeau',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['cadeau', 'offrir', 'emballage', 'gift', 'présent']
-    },
-    # === CONTACT ===
-    {
-        'content': 'Vous pouvez nous écrire à info@marakame.ch. Nous répondons généralement sous 24 à 48 heures ouvrables. Adresse: 1213 Petit-Lancy, Genève (CH).',
-        'category': 'contact',
-        'url': 'https://marakame.ch/pages/faq',
-        'keywords': ['contact', 'contacter', 'email', 'adresse', 'joindre', 'écrire']
-    },
-]
-
-# ==================== LANGUAGE DETECTION ====================
-def detect_language(text):
-    text_lower = text.lower()
-    fr_words = ['bonjour', 'merci', 'commande', 'livraison', 'comment', 'quand', 'où', 'pourquoi', 'je', 'mon', 'ma', 'une', 'des', 'les', 'pour', 'avec', 'quel', 'quelle']
-    en_words = ['hello', 'hi', 'thanks', 'order', 'delivery', 'how', 'when', 'where', 'what', 'my', 'the', 'is', 'are', 'can', 'could']
-    
-    scores = {
-        'fr': sum(1 for w in fr_words if w in text_lower),
-        'en': sum(1 for w in en_words if w in text_lower),
-    }
-    
-    return 'en' if scores['en'] > scores['fr'] else 'fr'
-
-# ==================== RAG ====================
-class MultilingualRAG:
-    def __init__(self):
-        self.documents = []
-        self.index = defaultdict(list)
-    
-    def add_documents(self, docs):
-        for doc in docs:
-            doc_id = len(self.documents)
-            self.documents.append(doc)
-            for kw in doc.get('keywords', []):
-                self.index[kw.lower()].append(doc_id)
-            words = self._tokenize(doc['content'])
-            for word in set(words):
-                if len(word) > 2:
-                    self.index[word].append(doc_id)
-    
-    def _tokenize(self, text):
-        text = text.lower()
-        text = re.sub(r'[^\w\s]', ' ', text)
-        return text.split()
-    
-    def search(self, query, top_k=3):
-        query_words = self._tokenize(query)
-        scores = defaultdict(float)
-        
-        for word in query_words:
-            if word in self.index:
-                for doc_id in self.index[word]:
-                    scores[doc_id] += 1
-        
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        results = []
-        
-        for doc_id, score in ranked[:top_k]:
-            doc = self.documents[doc_id]
-            results.append({
-                'content': doc['content'],
-                'category': doc.get('category', ''),
-                'url': doc.get('url', ''),
-                'score': score
-            })
-        return results
-
-rag = MultilingualRAG()
-rag.add_documents(FAQ_DATA)
-
-# ==================== SHOPIFY ====================
 def get_shopify_order(order_id_or_email):
     token = get_shopify_token()
     if not token:
@@ -554,7 +679,7 @@ def format_order_info(order):
 
 # ==================== TAIYARI PROMPT ====================
 def get_taiyari_prompt(language, context, is_continuing=False, hubspot_email_content=None):
-    continuation_rule = "NE PAS saluer à nouveau (pas de 'Bonjour', 'Hello', etc.) - la conversation est déjà en cours." if is_continuing else ""
+    continuation_rule = "NE PAS saluer à nouveau - la conversation est déjà en cours." if is_continuing else ""
     
     hubspot_instruction = ""
     if hubspot_email_content:
@@ -562,14 +687,9 @@ def get_taiyari_prompt(language, context, is_continuing=False, hubspot_email_con
 EMAIL DU CLIENT TROUVÉ DANS HUBSPOT:
 {hubspot_email_content}
 
-Tu dois RÉPONDRE à cette question en utilisant les informations de la FAQ ci-dessous. Ne dis pas que tu n'as pas l'information si elle est dans le contexte."""
+Tu dois RÉPONDRE à cette question en utilisant les informations du CONTEXTE ci-dessous."""
 
     return f"""Tu es Taiyari, l'assistant virtuel de Marakame, une boutique suisse de bijoux et accessoires artisanaux faits main.
-
-PRODUITS MARAKAME:
-- Bijoux: boucles d'oreilles, bagues, colliers
-- Accessoires: bracelets Wayuu, sacs Wayuu
-- Fabriqués par des artisanes au Mexique ou en Colombie (voir "Made in" sur chaque page produit)
 
 PERSONNALITÉ:
 - Chaleureux, amical et professionnel
@@ -582,13 +702,14 @@ RÈGLES STRICTES:
 1. NE JAMAIS utiliser le mot "Huichol"
 2. {continuation_rule}
 3. TOUJOURS chercher la réponse dans le CONTEXTE avant de dire que tu ne sais pas
-4. Si la question est GÉNÉRALE (ex: "quels matériaux?"), donne un résumé court (2-3 lignes) + le lien vers la page FAQ
-5. Si la question est PRÉCISE (ex: "c'est quoi le lapis lazuli?"), réponds directement avec les détails
+4. Si la question est GÉNÉRALE, donne un résumé court (2-3 lignes) + le lien vers la page
+5. Si la question est PRÉCISE, réponds directement avec les détails
 6. Ne rediriger vers info@marakame.ch QUE si la réponse n'est PAS dans le contexte
 7. Pour les commandes, demande le numéro ou l'email si non fourni
+8. Inclure les liens URL des sources quand pertinent
 {hubspot_instruction}
 
-CONTEXTE FAQ:
+CONTEXTE (données du site, produits Shopify, FAQ):
 {context}"""
 
 # ==================== LOGO ====================
@@ -761,7 +882,30 @@ def home():
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'healthy', 'service': 'Taiyari'})
+    return jsonify({
+        'status': 'healthy', 
+        'service': 'Taiyari',
+        'rag_documents': len(rag.documents),
+        'rag_last_update': rag.last_update.isoformat() if rag.last_update else None
+    })
+
+@app.route('/rag-status')
+def rag_status():
+    """Check RAG status and trigger update if needed"""
+    return jsonify({
+        'documents': len(rag.documents),
+        'last_update': rag.last_update.isoformat() if rag.last_update else None,
+        'is_updating': rag.is_updating,
+        'needs_update': rag.needs_update()
+    })
+
+@app.route('/rag-update', methods=['POST'])
+def rag_update():
+    """Manually trigger RAG update"""
+    if rag.is_updating:
+        return jsonify({'status': 'already_updating'})
+    threading.Thread(target=rag.update).start()
+    return jsonify({'status': 'update_started'})
 
 @app.route('/check-timeout', methods=['POST'])
 def check_timeout_endpoint():
@@ -782,7 +926,6 @@ def end_chat():
     
     if session_id and session_id in sessions:
         sessions[session_id]['closed'] = True
-        # Send email in background thread to avoid timeout
         threading.Thread(target=send_conversation_copy, args=(session_id,)).start()
         return jsonify({
             'success': True, 
@@ -790,6 +933,16 @@ def end_chat():
         })
     
     return jsonify({'success': False, 'message': 'Session non trouvée'})
+
+@app.route('/test-email', methods=['POST'])
+def test_email():
+    """Test endpoint to verify email configuration"""
+    result = send_email(
+        'info@marakame.ch',
+        'Test Taiyari - Configuration Email',
+        '<h1>Test</h1><p>Si vous recevez cet email, la configuration SMTP fonctionne !</p>'
+    )
+    return jsonify({'success': result})
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -811,7 +964,11 @@ def chat():
         'timestamp': datetime.now().strftime('%H:%M')
     })
     
-    language = detect_language(user_message)
+    # Detect language
+    language = 'fr'
+    en_words = ['hello', 'hi', 'thanks', 'order', 'delivery', 'how', 'when', 'where', 'what', 'my', 'the']
+    if sum(1 for w in en_words if w in user_message.lower()) > 2:
+        language = 'en'
     
     # Check for email in message
     email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', user_message)
@@ -840,16 +997,18 @@ def chat():
         order_info = get_shopify_order(email_match.group())
     
     # RAG search
-    context_docs = rag.search(user_message, top_k=3)
+    context_docs = rag.search(user_message, top_k=5)
     context_parts = []
     for doc in context_docs:
-        context_parts.append(f"{doc['content']}\n(Source: {doc['url']})")
-    context = "\n\n".join(context_parts)
+        source = f"[{doc['source'].upper()}]" if doc.get('source') else ""
+        url = doc.get('url', '')
+        context_parts.append(f"{source} {doc['content'][:1000]}\nURL: {url}")
+    context = "\n\n---\n\n".join(context_parts)
     
     if order_info:
         formatted = format_order_info(order_info)
         if formatted:
-            context += f"\n\nCOMMANDE SHOPIFY: {formatted['order_number']} - Statut: {formatted['status']} - Total: {formatted['total']} - Date: {formatted['created_at']}"
+            context += f"\n\n---\n\nCOMMANDE SHOPIFY: {formatted['order_number']} - Statut: {formatted['status']} - Total: {formatted['total']} - Date: {formatted['created_at']}"
     
     # Build conversation history
     claude_messages = []
@@ -876,6 +1035,14 @@ def chat():
     })
     
     return jsonify({'response': bot_response, 'language': language, 'session_id': session_id})
+
+# Initialize RAG on startup
+def init_rag():
+    print("DEBUG: Initializing RAG on startup...")
+    threading.Thread(target=rag.update).start()
+
+# Run initialization
+init_rag()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
