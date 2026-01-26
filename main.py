@@ -1,16 +1,17 @@
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import anthropic
 import os
 import re
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 import time
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import uuid
+import threading
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'marakame-taiyari-secret-2024')
@@ -35,7 +36,6 @@ TIMEOUT_WARNING = 5 * 60  # 5 minutes
 TIMEOUT_CLOSE = 10 * 60   # 10 minutes
 
 # ==================== SESSION STORAGE ====================
-# In production, use Redis or database
 sessions = {}
 
 def get_session(session_id):
@@ -58,7 +58,6 @@ def update_session_activity(session_id):
         sessions[session_id]['warning_sent'] = False
 
 def check_session_timeout(session_id):
-    """Check if session has timed out and return appropriate message"""
     if session_id not in sessions:
         return None
     
@@ -69,12 +68,12 @@ def check_session_timeout(session_id):
     elapsed = (datetime.now() - session_data['last_activity']).total_seconds()
     
     if elapsed >= TIMEOUT_CLOSE:
-        # Close session
         session_data['closed'] = True
-        send_conversation_copy(session_id)
+        # Send email in background thread
+        threading.Thread(target=send_conversation_copy, args=(session_id,)).start()
         return {
             'type': 'closed',
-            'message': "Il semble que vous ne soyez plus connecté. Je ferme cette conversation. Une copie a été envoyée à notre équipe. N'hésitez pas à revenir ! 👋"
+            'message': "Il semble que vous ne soyez plus connecté. Je ferme cette conversation. Une copie a été envoyée à notre équipe. N'hésitez pas à revenir si vous avez d'autres questions ! 👋"
         }
     elif elapsed >= TIMEOUT_WARNING and not session_data['warning_sent']:
         session_data['warning_sent'] = True
@@ -93,6 +92,7 @@ def send_email(to_email, subject, body_html):
         return False
     
     try:
+        print(f"DEBUG: Attempting to send email to {to_email}")
         msg = MIMEMultipart('alternative')
         msg['Subject'] = subject
         msg['From'] = f"Marakame <{SMTP_FROM}>"
@@ -101,12 +101,12 @@ def send_email(to_email, subject, body_html):
         html_part = MIMEText(body_html, 'html', 'utf-8')
         msg.attach(html_part)
         
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.sendmail(SMTP_FROM, to_email, msg.as_string())
         
-        print(f"DEBUG: Email sent to {to_email}")
+        print(f"DEBUG: Email sent successfully to {to_email}")
         return True
     except Exception as e:
         print(f"DEBUG: Email error: {e}")
@@ -170,9 +170,7 @@ def send_conversation_copy(session_id):
 
 # ==================== HUBSPOT FUNCTIONS ====================
 def search_hubspot_contact(email):
-    """Search for a contact in HubSpot by email"""
     if not HUBSPOT_API_KEY:
-        print("DEBUG: HUBSPOT_API_KEY not configured")
         return None
     
     try:
@@ -193,8 +191,6 @@ def search_hubspot_contact(email):
         }
         
         response = requests.post(url, headers=headers, json=payload, timeout=10)
-        print(f"DEBUG: HubSpot contact search status: {response.status_code}")
-        
         if response.status_code == 200:
             data = response.json()
             if data.get('results'):
@@ -207,19 +203,17 @@ def search_hubspot_contact(email):
 def get_hubspot_emails(email):
     """Get emails from HubSpot for a contact"""
     if not HUBSPOT_API_KEY:
-        print("DEBUG: HUBSPOT_API_KEY not configured")
         return []
     
     try:
-        # First find the contact
         contact = search_hubspot_contact(email)
         if not contact:
             print(f"DEBUG: No HubSpot contact found for {email}")
             return []
         
         contact_id = contact['id']
+        firstname = contact.get('properties', {}).get('firstname', '')
         
-        # Get email engagements for this contact
         url = f"https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}/associations/emails"
         headers = {
             'Authorization': f'Bearer {HUBSPOT_API_KEY}',
@@ -230,7 +224,6 @@ def get_hubspot_emails(email):
         print(f"DEBUG: HubSpot emails association status: {response.status_code}")
         
         if response.status_code != 200:
-            print(f"DEBUG: HubSpot association error: {response.text}")
             return []
         
         associations = response.json().get('results', [])
@@ -239,9 +232,8 @@ def get_hubspot_emails(email):
         if not associations:
             return []
         
-        # Get email details with all properties
         emails = []
-        for assoc in associations[:5]:  # Limit to 5 most recent
+        for assoc in associations[:5]:
             email_id = assoc.get('id') or assoc.get('toObjectId')
             if not email_id:
                 continue
@@ -249,39 +241,32 @@ def get_hubspot_emails(email):
             email_url = f"https://api.hubapi.com/crm/v3/objects/emails/{email_id}?properties=hs_email_subject,hs_email_text,hs_email_html,hs_email_body,hs_timestamp,hs_email_direction,hs_body_preview"
             email_response = requests.get(email_url, headers=headers, timeout=10)
             
-            print(f"DEBUG: Email {email_id} fetch status: {email_response.status_code}")
-            
             if email_response.status_code == 200:
                 email_data = email_response.json()
                 props = email_data.get('properties', {})
-                print(f"DEBUG: Email properties: {list(props.keys())}")
                 
-                # Try multiple fields for body content
-                body = props.get('hs_email_text') or props.get('hs_email_html') or props.get('hs_email_body') or props.get('hs_body_preview') or ''
+                body = props.get('hs_email_text') or props.get('hs_body_preview') or props.get('hs_email_html') or ''
                 
-                # Clean HTML if present
                 if '<' in body and '>' in body:
                     body = re.sub(r'<[^>]+>', ' ', body)
                     body = re.sub(r'\s+', ' ', body).strip()
                 
                 emails.append({
                     'subject': props.get('hs_email_subject', 'Sans sujet'),
-                    'body': body[:500] if body else 'Contenu non disponible',
+                    'body': body[:500] if body else '',
                     'date': props.get('hs_timestamp', ''),
-                    'direction': props.get('hs_email_direction', '')
+                    'direction': props.get('hs_email_direction', ''),
+                    'firstname': firstname
                 })
         
-        print(f"DEBUG: Retrieved {len(emails)} emails with content")
+        print(f"DEBUG: Retrieved {len(emails)} emails")
         return emails
     except Exception as e:
         print(f"DEBUG: HubSpot emails error: {e}")
         return []
 
 # ==================== SHOPIFY TOKEN ====================
-shopify_token_cache = {
-    'access_token': None,
-    'expires_at': 0
-}
+shopify_token_cache = {'access_token': None, 'expires_at': 0}
 
 def get_shopify_token():
     if shopify_token_cache['access_token'] and time.time() < shopify_token_cache['expires_at'] - 300:
@@ -311,68 +296,170 @@ def get_shopify_token():
         print(f"DEBUG: Shopify token error: {e}")
     return None
 
-# ==================== CONVERSATION STORAGE ====================
-conversations = []
-
-def log_conversation(user_message, bot_response, language='fr'):
-    conversations.append({
-        'timestamp': datetime.now().isoformat(),
-        'user_message': user_message,
-        'bot_response': bot_response,
-        'language': language
-    })
-
-# ==================== FAQ DATA ====================
+# ==================== FAQ DATA - COMPLETE FROM MARAKAME.CH ====================
 FAQ_DATA = [
+    # === ABOUT ===
     {
-        'content': 'Marakame est une boutique suisse proposant des bijoux et accessoires artisanaux faits main. Nos créations incluent des boucles d\'oreilles, bagues, colliers, bracelets Wayuu et sacs Wayuu. Chaque pièce est unique, fabriquée par des artisanes au Mexique ou en Colombie selon le produit (l\'origine est indiquée sur chaque page produit).',
-        'content_en': 'Marakame is a Swiss boutique offering handmade artisanal jewelry and accessories. Our creations include earrings, rings, necklaces, Wayuu bracelets and Wayuu bags. Each piece is unique, made by artisans in Mexico or Colombia depending on the product (origin is indicated on each product page).',
+        'content': 'Marakame est une boutique suisse proposant des bijoux et accessoires artisanaux faits main. Nos créations incluent des boucles d\'oreilles, bagues, colliers, bracelets Wayuu et sacs Wayuu. Chaque pièce est unique, fabriquée par des artisanes au Mexique ou en Colombie (l\'origine est indiquée sur chaque page produit sous "Made in").',
         'category': 'about',
-        'keywords': ['marakame', 'bijoux', 'jewelry', 'accessoires', 'artisan', 'mexique', 'colombie', 'wayuu', 'boucles', 'bagues', 'colliers']
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['marakame', 'bijoux', 'accessoires', 'artisan', 'mexique', 'colombie', 'wayuu', 'boutique', 'suisse']
     },
+    # === COMMANDE ET SUIVI ===
     {
-        'content': 'Livraison en Suisse: gratuite dès 50 CHF, délai de 2-4 jours ouvrables. Livraison internationale (France, Allemagne, etc.): 5-10 jours ouvrables, frais calculés à la commande.',
-        'content_en': 'Delivery in Switzerland: free from 50 CHF, 2-4 business days. International delivery (France, Germany, etc.): 5-10 business days, fees calculated at checkout.',
-        'category': 'livraison',
-        'keywords': ['livraison', 'delivery', 'shipping', 'suisse', 'international', 'france', 'délai', 'jours']
-    },
-    {
-        'content': 'Modes de paiement acceptés: carte de crédit (Visa, Mastercard, American Express), PayPal, Twint, et virement bancaire. Tous les paiements sont 100% sécurisés.',
-        'content_en': 'Accepted payment methods: credit card (Visa, Mastercard, American Express), PayPal, Twint, and bank transfer. All payments are 100% secure.',
-        'category': 'paiement',
-        'keywords': ['paiement', 'payment', 'carte', 'credit', 'paypal', 'twint', 'visa', 'mastercard']
-    },
-    {
-        'content': 'Retours acceptés sous 30 jours après réception. Le produit doit être dans son état original avec emballage. Contactez info@marakame.ch pour initier un retour. Remboursement sous 5-7 jours après réception.',
-        'content_en': 'Returns accepted within 30 days of receipt. Product must be in original condition with packaging. Contact info@marakame.ch to initiate a return. Refund within 5-7 days after receipt.',
-        'category': 'retours',
-        'keywords': ['retour', 'return', 'remboursement', 'refund', '30 jours', 'échange']
-    },
-    {
-        'content': 'Nos bijoux (boucles d\'oreilles, bagues, colliers) sont fabriqués avec des matériaux de qualité par des artisanes. L\'origine (Mexique ou Colombie) est indiquée sur chaque page produit sous "Made in". Les bracelets et sacs Wayuu sont tissés à la main par des artisanes colombiennes de la communauté Wayuu.',
-        'content_en': 'Our jewelry (earrings, rings, necklaces) is crafted with quality materials by artisans. The origin (Mexico or Colombia) is indicated on each product page under "Made in". Wayuu bracelets and bags are hand-woven by Colombian artisans from the Wayuu community.',
-        'category': 'produits',
-        'keywords': ['bijoux', 'jewelry', 'boucles', 'earrings', 'bagues', 'rings', 'colliers', 'necklaces', 'wayuu', 'sac', 'bag', 'bracelet']
-    },
-    {
-        'content': 'Entretien des bijoux: évitez le contact prolongé avec l\'eau, les parfums et produits chimiques. Rangez-les dans une pochette pour préserver leur éclat.',
-        'content_en': 'Jewelry care: avoid prolonged contact with water, perfumes and chemicals. Store in a pouch to preserve their shine.',
-        'category': 'entretien',
-        'keywords': ['entretien', 'care', 'nettoyage', 'eau', 'water', 'rangement']
-    },
-    {
-        'content': 'Pour suivre votre commande, connectez-vous à votre compte sur marakame.ch ou utilisez le lien de suivi envoyé par email. Si vous n\'avez pas reçu d\'email, vérifiez vos spams ou contactez info@marakame.ch.',
-        'content_en': 'To track your order, log in to your account on marakame.ch or use the tracking link sent by email. Contact info@marakame.ch if needed.',
+        'content': 'Une fois votre commande validée, vous recevez un e-mail de confirmation. Dès que votre commande est expédiée, un e-mail contenant les informations de suivi vous est envoyé.',
         'category': 'commande',
-        'keywords': ['commande', 'order', 'suivi', 'tracking', 'email', 'compte']
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['commande', 'suivi', 'confirmation', 'email', 'expédition', 'où en est']
+    },
+    {
+        'content': 'Lorsque votre commande est expédiée, un lien de suivi vous est communiqué par e-mail afin de suivre l\'acheminement de votre colis en temps réel.',
+        'category': 'commande',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['suivi', 'livraison', 'tracking', 'colis', 'temps réel']
+    },
+    {
+        'content': 'Les commandes peuvent être modifiées ou annulées dans un délai de 12 à 24 heures après validation, tant qu\'elles n\'ont pas encore été expédiées. Contactez-nous rapidement par e-mail à info@marakame.ch.',
+        'category': 'commande',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['modifier', 'annuler', 'commande', 'annulation', 'modification']
+    },
+    # === LIVRAISON ===
+    {
+        'content': 'Les commandes sont généralement préparées sous 1 à 3 jours ouvrables. Délais de livraison: Suisse: 2 à 5 jours ouvrables. International (France, Belgique, Espagne, etc.): 5 à 10 jours ouvrables.',
+        'category': 'livraison',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['délai', 'livraison', 'jours', 'suisse', 'international', 'france', 'belgique']
+    },
+    {
+        'content': 'Oui, nous livrons en Suisse ainsi que dans plusieurs pays à l\'international. Les options disponibles s\'affichent lors du passage en caisse.',
+        'category': 'livraison',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['livraison', 'international', 'pays', 'suisse']
+    },
+    {
+        'content': 'La livraison est gratuite en Suisse dès CHF 80.– d\'achat. En dessous de ce montant ou pour les livraisons internationales, les frais sont calculés automatiquement lors du paiement.',
+        'category': 'livraison',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['frais', 'livraison', 'gratuit', 'gratuite', '80', 'chf', 'prix']
+    },
+    {
+        'content': 'Si un article présente un défaut ou un dommage à la réception, veuillez nous contacter dans les 48 heures avec des photos du bijou concerné à info@marakame.ch. Nous procéderons à une analyse et proposerons, selon le cas, un échange, une réparation ou un remboursement.',
+        'category': 'livraison',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['endommagé', 'défaut', 'dommage', 'cassé', 'abîmé', 'réception']
+    },
+    # === MATÉRIAUX ET PRODUITS ===
+    {
+        'content': 'Oui, tous les bijoux Marakame sont faits à la main par des artisanes, avec soin et attention aux détails.',
+        'category': 'produits',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['fait main', 'handmade', 'artisanal', 'artisane']
+    },
+    {
+        'content': '''Les matériaux varient selon les créations: plaqué or, bronze, acier inoxydable, perles Miyuki, pierres naturelles, etc. Les détails précis sont indiqués sur chaque fiche produit.
+
+Perles Miyuki: Petites perles en verre uniformes japonaises, souvent aux couleurs vives et à la finition brillante, idéales pour le tissage.
+
+Perles de verre/tchèques: Perles en verre de formes variées, souvent colorées et transparentes, avec un fini lisse et brillant. Fabriquées en République tchèque.
+
+Lapis lazuli: Pierre précieuse bleu profond avec des inclusions dorées de pyrite. Associée à la sagesse et à la vérité.
+
+Jade: Pierre verte (peut varier du blanc au violet), avec un éclat doux. Symbolise la pureté et l'harmonie.
+
+Citrine: Pierre jaune doré à orange, transparente. Représente l'abondance et la créativité.
+
+Corail rouge: Pierre rouge à rouge orangé. Symbolise la vitalité et la protection.
+
+Onyx: Pierre noir profond. Associée à la force et à la stabilité émotionnelle.''',
+        'category': 'materiaux',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['matériau', 'matériaux', 'material', 'plaqué or', 'bronze', 'acier', 'perle', 'miyuki', 'pierre', 'lapis', 'jade', 'citrine', 'corail', 'onyx', 'verre', 'tchèque']
+    },
+    {
+        'content': 'Nos bijoux sont sélectionnés pour être confortables au quotidien. La majorité est sans nickel, mais en cas d\'allergie spécifique à certains matériaux, nous conseillons de consulter la description du produit ou de nous contacter à info@marakame.ch.',
+        'category': 'produits',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['hypoallergénique', 'allergie', 'nickel', 'sensible', 'peau']
+    },
+    {
+        'content': 'Pour préserver la qualité et la durabilité des bijoux, nous recommandons d\'éviter le contact avec l\'eau, le parfum, les lotions et la transpiration excessive.',
+        'category': 'entretien',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['eau', 'water', 'résistant', 'parfum', 'quotidien', 'douche', 'bain']
+    },
+    # === TAILLES ===
+    {
+        'content': 'Les dimensions et informations de taille sont indiquées sur chaque fiche produit. Certaines bagues sont ajustables pour plus de flexibilité.',
+        'category': 'taille',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['taille', 'dimension', 'ajustable', 'mesure', 'bague', 'bracelet']
+    },
+    {
+        'content': 'Si la taille ne convient pas, contactez-nous dans les 14 jours suivant la réception à info@marakame.ch afin de trouver une solution (échange ou retour).',
+        'category': 'taille',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['taille', 'convient pas', 'échange', 'retour', 'trop grand', 'trop petit']
+    },
+    {
+        'content': 'Oui, les échanges sont possibles sous réserve de disponibilité et à condition que le bijou n\'ait pas été porté ou endommagé.',
+        'category': 'retours',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['échange', 'échanger', 'autre modèle', 'autre taille']
+    },
+    # === RETOURS ET REMBOURSEMENTS ===
+    {
+        'content': 'Les retours sont acceptés dans un délai de 14 jours après réception. Les bijoux doivent être non portés et dans leur emballage d\'origine. Le remboursement est effectué après réception et vérification du produit.',
+        'category': 'retours',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['retour', 'retourner', 'remboursement', 'rembourser', '14 jours', 'politique']
+    },
+    {
+        'content': 'Si vous recevez un bijou endommagé ou incorrect, contactez-nous dès réception avec une photo du produit concerné à info@marakame.ch. Nous vous proposerons un remplacement ou un remboursement.',
+        'category': 'retours',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['endommagé', 'incorrect', 'erreur', 'mauvais', 'cassé']
+    },
+    # === ENTRETIEN ===
+    {
+        'content': 'Rangez vos bijoux à l\'abri de l\'humidité, évitez le contact avec les liquides et nettoyez-les délicatement avec un chiffon doux.',
+        'category': 'entretien',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['entretien', 'entretenir', 'nettoyer', 'ranger', 'conserver', 'préserver', 'chiffon']
+    },
+    # === PAIEMENT ===
+    {
+        'content': 'Nous acceptons les principales cartes de crédit (Visa, Mastercard, American Express), ainsi que Google Pay, Apple Pay, PayPal.',
+        'category': 'paiement',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['paiement', 'carte', 'visa', 'mastercard', 'paypal', 'apple pay', 'google pay', 'payer']
+    },
+    {
+        'content': 'Oui, toutes les transactions sont sécurisées via des systèmes de paiement cryptés conformes aux standards de sécurité.',
+        'category': 'paiement',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['sécurisé', 'sécurité', 'paiement', 'crypté', 'sûr']
+    },
+    # === CADEAUX ===
+    {
+        'content': 'Oui, nos bijoux sont soigneusement emballés et peuvent être offerts directement. N\'hésitez pas à nous contacter pour une demande spéciale à info@marakame.ch.',
+        'category': 'cadeau',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['cadeau', 'offrir', 'emballage', 'gift', 'présent']
+    },
+    # === CONTACT ===
+    {
+        'content': 'Vous pouvez nous écrire à info@marakame.ch. Nous répondons généralement sous 24 à 48 heures ouvrables. Adresse: 1213 Petit-Lancy, Genève (CH).',
+        'category': 'contact',
+        'url': 'https://marakame.ch/pages/faq',
+        'keywords': ['contact', 'contacter', 'email', 'adresse', 'joindre', 'écrire']
     },
 ]
 
 # ==================== LANGUAGE DETECTION ====================
 def detect_language(text):
     text_lower = text.lower()
-    
-    fr_words = ['bonjour', 'merci', 'commande', 'livraison', 'comment', 'quand', 'où', 'pourquoi', 'je', 'mon', 'ma', 'une', 'des', 'les', 'pour', 'avec']
+    fr_words = ['bonjour', 'merci', 'commande', 'livraison', 'comment', 'quand', 'où', 'pourquoi', 'je', 'mon', 'ma', 'une', 'des', 'les', 'pour', 'avec', 'quel', 'quelle']
     en_words = ['hello', 'hi', 'thanks', 'order', 'delivery', 'how', 'when', 'where', 'what', 'my', 'the', 'is', 'are', 'can', 'could']
     
     scores = {
@@ -380,10 +467,7 @@ def detect_language(text):
         'en': sum(1 for w in en_words if w in text_lower),
     }
     
-    max_score = max(scores.values())
-    if max_score == 0:
-        return 'fr'
-    return max(scores, key=scores.get)
+    return 'en' if scores['en'] > scores['fr'] else 'fr'
 
 # ==================== RAG ====================
 class MultilingualRAG:
@@ -395,22 +479,19 @@ class MultilingualRAG:
         for doc in docs:
             doc_id = len(self.documents)
             self.documents.append(doc)
-            keywords = doc.get('keywords', [])
-            for kw in keywords:
+            for kw in doc.get('keywords', []):
                 self.index[kw.lower()].append(doc_id)
-            for lang_key in ['content', 'content_en']:
-                if lang_key in doc:
-                    words = self._tokenize(doc[lang_key])
-                    for word in set(words):
-                        if len(word) > 2:
-                            self.index[word].append(doc_id)
+            words = self._tokenize(doc['content'])
+            for word in set(words):
+                if len(word) > 2:
+                    self.index[word].append(doc_id)
     
     def _tokenize(self, text):
         text = text.lower()
         text = re.sub(r'[^\w\s]', ' ', text)
         return text.split()
     
-    def search(self, query, language='fr', top_k=3):
+    def search(self, query, top_k=3):
         query_words = self._tokenize(query)
         scores = defaultdict(float)
         
@@ -421,12 +502,15 @@ class MultilingualRAG:
         
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         results = []
-        lang_key = 'content_en' if language == 'en' else 'content'
         
         for doc_id, score in ranked[:top_k]:
             doc = self.documents[doc_id]
-            content = doc.get(lang_key, doc.get('content', ''))
-            results.append({'content': content, 'category': doc.get('category', ''), 'score': score})
+            results.append({
+                'content': doc['content'],
+                'category': doc.get('category', ''),
+                'url': doc.get('url', ''),
+                'score': score
+            })
         return results
 
 rag = MultilingualRAG()
@@ -456,7 +540,7 @@ def get_shopify_order(order_id_or_email):
         print(f"DEBUG: Shopify error: {e}")
     return None
 
-def format_order_info(order, language='fr'):
+def format_order_info(order):
     if not order:
         return None
     status_map = {'fulfilled': 'Expédiée', 'unfulfilled': 'En préparation', 'partially_fulfilled': 'Partiellement expédiée'}
@@ -469,10 +553,18 @@ def format_order_info(order, language='fr'):
     }
 
 # ==================== TAIYARI PROMPT ====================
-def get_taiyari_prompt(language, context, is_new_conversation=True):
-    greeting_instruction = "" if is_new_conversation else "NE PAS dire 'Bonjour' ou resaluer - la conversation est déjà en cours."
+def get_taiyari_prompt(language, context, is_continuing=False, hubspot_email_content=None):
+    continuation_rule = "NE PAS saluer à nouveau (pas de 'Bonjour', 'Hello', etc.) - la conversation est déjà en cours." if is_continuing else ""
     
-    return f"""Tu es Taiyari, l'assistant virtuel de Marakame, une boutique suisse de bijoux et accessoires artisanaux.
+    hubspot_instruction = ""
+    if hubspot_email_content:
+        hubspot_instruction = f"""
+EMAIL DU CLIENT TROUVÉ DANS HUBSPOT:
+{hubspot_email_content}
+
+Tu dois RÉPONDRE à cette question en utilisant les informations de la FAQ ci-dessous. Ne dis pas que tu n'as pas l'information si elle est dans le contexte."""
+
+    return f"""Tu es Taiyari, l'assistant virtuel de Marakame, une boutique suisse de bijoux et accessoires artisanaux faits main.
 
 PRODUITS MARAKAME:
 - Bijoux: boucles d'oreilles, bagues, colliers
@@ -481,22 +573,22 @@ PRODUITS MARAKAME:
 
 PERSONNALITÉ:
 - Chaleureux, amical et professionnel
-- Utilise des expressions naturelles: "Hmm...", "Voyons voir...", "Ah !"
-- Concis et direct (2-3 phrases max)
+- Expressions naturelles: "Hmm...", "Voyons voir...", "Ah !"
+- Concis: 2-3 phrases max pour les réponses simples
 - Emojis avec parcimonie (1-2 max)
 - Vouvoie les clients
 
 RÈGLES STRICTES:
 1. NE JAMAIS utiliser le mot "Huichol"
-2. {greeting_instruction}
-3. Réponds UNIQUEMENT avec le contexte fourni
-4. Ne jamais inventer d'information
-5. Pour l'origine d'un produit, référer à la page produit
-6. Si pas d'info: proposer de contacter info@marakame.ch
-7. Pour les commandes, demande le numéro ou l'email
-8. Pour les emails HubSpot, demande l'adresse email utilisée pour l'envoi
+2. {continuation_rule}
+3. TOUJOURS chercher la réponse dans le CONTEXTE avant de dire que tu ne sais pas
+4. Si la question est GÉNÉRALE (ex: "quels matériaux?"), donne un résumé court (2-3 lignes) + le lien vers la page FAQ
+5. Si la question est PRÉCISE (ex: "c'est quoi le lapis lazuli?"), réponds directement avec les détails
+6. Ne rediriger vers info@marakame.ch QUE si la réponse n'est PAS dans le contexte
+7. Pour les commandes, demande le numéro ou l'email si non fourni
+{hubspot_instruction}
 
-CONTEXTE:
+CONTEXTE FAQ:
 {context}"""
 
 # ==================== LOGO ====================
@@ -527,6 +619,7 @@ def home():
         .message.bot {{ background: white; color: #333; align-self: flex-start; border-bottom-left-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); display: flex; gap: 10px; align-items: flex-start; }}
         .bot-avatar {{ width: 28px; height: 28px; flex-shrink: 0; }}
         .bot-avatar img {{ width: 100%; height: 100%; object-fit: contain; }}
+        .bot-text a {{ color: #2d8f7b; }}
         .message.error {{ background: #fee2e2; color: #dc2626; }}
         .loading-dots {{ display: flex; gap: 4px; padding: 4px 0; }}
         .loading-dots span {{ width: 8px; height: 8px; background: #2d8f7b; border-radius: 50%; animation: bounce 1.4s ease-in-out infinite; }}
@@ -554,7 +647,7 @@ def home():
         <div class="chat-messages" id="messages">
             <div class="message bot">
                 <div class="bot-avatar"><img src="data:image/png;base64,{LOGO_BASE64}" alt="T"></div>
-                <div>Bonjour ! 👋 Je suis Taiyari, votre assistant Marakame. Comment puis-je vous aider ?</div>
+                <div class="bot-text">Bonjour ! 👋 Je suis Taiyari, votre assistant Marakame. Comment puis-je vous aider ?</div>
             </div>
         </div>
         <div class="chat-input">
@@ -567,7 +660,6 @@ def home():
         const LOGO = "data:image/png;base64,{LOGO_BASE64}";
         let sessionId = localStorage.getItem('taiyari_session') || generateSessionId();
         localStorage.setItem('taiyari_session', sessionId);
-        let lastActivity = Date.now();
         let timeoutChecker = null;
         
         function generateSessionId() {{
@@ -589,17 +681,19 @@ def home():
                 const data = await response.json();
                 if (data.timeout_message) {{
                     addBotMessage(data.timeout_message);
-                    if (data.closed) {{
-                        clearInterval(timeoutChecker);
-                    }}
+                    if (data.closed) clearInterval(timeoutChecker);
                 }}
             }} catch (e) {{ console.error(e); }}
         }}
         
         function addBotMessage(text) {{
             const messages = document.getElementById('messages');
-            messages.innerHTML += '<div class="message bot"><div class="bot-avatar"><img src="' + LOGO + '" alt="T"></div><div>' + escapeHtml(text) + '</div></div>';
+            messages.innerHTML += '<div class="message bot"><div class="bot-avatar"><img src="' + LOGO + '" alt="T"></div><div class="bot-text">' + formatMessage(text) + '</div></div>';
             messages.scrollTop = messages.scrollHeight;
+        }}
+        
+        function formatMessage(text) {{
+            return text.replace(/(https?:\\/\\/[^\\s]+)/g, '<a href="$1" target="_blank">$1</a>');
         }}
         
         async function sendMessage() {{
@@ -608,7 +702,6 @@ def home():
             const message = input.value.trim();
             if (!message) return;
             
-            lastActivity = Date.now();
             messages.innerHTML += '<div class="message user">' + escapeHtml(message) + '</div>';
             input.value = '';
             
@@ -628,7 +721,7 @@ def home():
                 if (data.error) {{
                     messages.innerHTML += '<div class="message error">Erreur: ' + escapeHtml(data.error) + '</div>';
                 }} else {{
-                    messages.innerHTML += '<div class="message bot"><div class="bot-avatar"><img src="' + LOGO + '" alt="T"></div><div>' + escapeHtml(data.response) + '</div></div>';
+                    messages.innerHTML += '<div class="message bot"><div class="bot-avatar"><img src="' + LOGO + '" alt="T"></div><div class="bot-text">' + formatMessage(data.response) + '</div></div>';
                 }}
             }} catch (error) {{
                 document.getElementById('loading-' + loadingId).remove();
@@ -639,7 +732,7 @@ def home():
         }}
         
         async function endChat() {{
-            if (confirm('Voulez-vous terminer cette conversation ? Une copie sera envoyée par email.')) {{
+            if (confirm('Voulez-vous terminer cette conversation ?')) {{
                 try {{
                     const response = await fetch('/end-chat', {{
                         method: 'POST',
@@ -647,13 +740,11 @@ def home():
                         body: JSON.stringify({{ session_id: sessionId }})
                     }});
                     const data = await response.json();
-                    addBotMessage(data.message || 'Conversation terminée. Merci et à bientôt ! 👋');
+                    addBotMessage(data.message);
                     localStorage.removeItem('taiyari_session');
                     sessionId = generateSessionId();
                     localStorage.setItem('taiyari_session', sessionId);
-                }} catch (e) {{
-                    console.error(e);
-                }}
+                }} catch (e) {{ console.error(e); }}
             }}
         }}
         
@@ -672,26 +763,16 @@ def home():
 def health():
     return jsonify({'status': 'healthy', 'service': 'Taiyari'})
 
-@app.route('/conversations')
-def get_conversations():
-    return jsonify({'total': len(conversations), 'conversations': conversations[-100:]})
-
 @app.route('/check-timeout', methods=['POST'])
-def check_timeout():
+def check_timeout_endpoint():
     data = request.json
     session_id = data.get('session_id')
-    
     if not session_id:
         return jsonify({'error': 'No session ID'})
     
     timeout_info = check_session_timeout(session_id)
-    
     if timeout_info:
-        return jsonify({
-            'timeout_message': timeout_info['message'],
-            'closed': timeout_info['type'] == 'closed'
-        })
-    
+        return jsonify({'timeout_message': timeout_info['message'], 'closed': timeout_info['type'] == 'closed'})
     return jsonify({'timeout_message': None})
 
 @app.route('/end-chat', methods=['POST'])
@@ -701,8 +782,12 @@ def end_chat():
     
     if session_id and session_id in sessions:
         sessions[session_id]['closed'] = True
-        send_conversation_copy(session_id)
-        return jsonify({'success': True, 'message': 'Merci pour cette conversation ! Une copie a été envoyée. À bientôt ! 👋'})
+        # Send email in background thread to avoid timeout
+        threading.Thread(target=send_conversation_copy, args=(session_id,)).start()
+        return jsonify({
+            'success': True, 
+            'message': 'Merci pour cette conversation ! 😊 Une copie a été envoyée par email. N\'hésitez pas à revenir si vous avez d\'autres questions. À bientôt ! 👋'
+        })
     
     return jsonify({'success': False, 'message': 'Session non trouvée'})
 
@@ -715,15 +800,11 @@ def chat():
     user_message = data.get('message', '')
     session_id = data.get('session_id', str(uuid.uuid4()))
     
-    # Get or create session
     session_data = get_session(session_id)
     update_session_activity(session_id)
     
-    # Check if this is the first message (greeting already shown in UI)
-    is_new_conversation = len(session_data['messages']) == 0
-    session_data['greeted'] = True
+    is_continuing = len(session_data['messages']) > 0
     
-    # Store user message
     session_data['messages'].append({
         'role': 'user',
         'content': user_message,
@@ -732,20 +813,21 @@ def chat():
     
     language = detect_language(user_message)
     
-    # Check for email in message and store it
+    # Check for email in message
     email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', user_message)
     if email_match:
         session_data['visitor_email'] = email_match.group()
     
     # Check for HubSpot email request
-    hubspot_context = ""
-    if any(word in user_message.lower() for word in ['email', 'mail', 'envoyé', 'sent', 'message']):
+    hubspot_email_content = None
+    if any(word in user_message.lower() for word in ['email', 'mail', 'envoyé', 'sent', 'message', 'écrit']):
         if email_match:
             emails = get_hubspot_emails(email_match.group())
             if emails:
-                hubspot_context = "\n\nEMAILS TROUVÉS DANS HUBSPOT:\n"
-                for email in emails[:3]:
-                    hubspot_context += f"- Sujet: {email['subject']}\n  Contenu: {email['body'][:200]}...\n"
+                for email in emails:
+                    if email['body']:
+                        hubspot_email_content = f"De: {email_match.group()}\nSujet: {email['subject']}\nContenu: {email['body']}"
+                        break
     
     # Check for Shopify order
     order_info = None
@@ -758,19 +840,20 @@ def chat():
         order_info = get_shopify_order(email_match.group())
     
     # RAG search
-    context_docs = rag.search(user_message, language=language, top_k=3)
-    context = "\n".join([doc['content'] for doc in context_docs])
+    context_docs = rag.search(user_message, top_k=3)
+    context_parts = []
+    for doc in context_docs:
+        context_parts.append(f"{doc['content']}\n(Source: {doc['url']})")
+    context = "\n\n".join(context_parts)
     
     if order_info:
-        formatted = format_order_info(order_info, language)
+        formatted = format_order_info(order_info)
         if formatted:
-            context += f"\n\nCOMMANDE: {formatted['order_number']} - Statut: {formatted['status']} - Total: {formatted['total']} - Date: {formatted['created_at']}"
+            context += f"\n\nCOMMANDE SHOPIFY: {formatted['order_number']} - Statut: {formatted['status']} - Total: {formatted['total']} - Date: {formatted['created_at']}"
     
-    context += hubspot_context
-    
-    # Build conversation history for Claude
+    # Build conversation history
     claude_messages = []
-    for msg in session_data['messages'][-10:]:  # Last 10 messages for context
+    for msg in session_data['messages'][-10:]:
         claude_messages.append({
             "role": msg['role'] if msg['role'] == 'user' else 'assistant',
             "content": msg['content']
@@ -780,20 +863,17 @@ def chat():
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=500,
-        system=get_taiyari_prompt(language, context, is_new_conversation),
+        system=get_taiyari_prompt(language, context, is_continuing, hubspot_email_content),
         messages=claude_messages
     )
     
     bot_response = response.content[0].text
     
-    # Store bot response
     session_data['messages'].append({
         'role': 'assistant',
         'content': bot_response,
         'timestamp': datetime.now().strftime('%H:%M')
     })
-    
-    log_conversation(user_message, bot_response, language)
     
     return jsonify({'response': bot_response, 'language': language, 'session_id': session_id})
 
