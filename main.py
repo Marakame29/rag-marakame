@@ -40,6 +40,10 @@ WEBSITE_URL = 'https://marakame.ch'
 TIMEOUT_WARNING = 5 * 60
 TIMEOUT_CLOSE = 10 * 60
 
+# Session limits (anti-abuse)
+MAX_MESSAGES_PER_SESSION = 20
+MAX_SESSION_DURATION = 15 * 60  # 15 minutes
+
 # ==================== DYNAMIC RAG ====================
 class DynamicRAG:
     def __init__(self):
@@ -359,12 +363,15 @@ def get_session(session_id):
         sessions[session_id] = {
             'id': session_id,
             'started_at': datetime.now().isoformat(),
+            'session_start': datetime.now(),
             'last_activity': datetime.now(),
             'messages': [],
+            'message_count': 0,
             'visitor_email': None,
             'greeted': False,
             'warning_sent': False,
-            'closed': False
+            'closed': False,
+            'close_reason': None
         }
     return sessions[session_id]
 
@@ -372,6 +379,55 @@ def update_session_activity(session_id):
     if session_id in sessions:
         sessions[session_id]['last_activity'] = datetime.now()
         sessions[session_id]['warning_sent'] = False
+
+def check_session_limits(session_id):
+    """Check if session has reached message or time limits"""
+    if session_id not in sessions:
+        return None
+    
+    session_data = sessions[session_id]
+    
+    if session_data['closed']:
+        return {
+            'limited': True,
+            'reason': session_data.get('close_reason', 'closed'),
+            'message': "Cette conversation est terminée. Actualisez la page pour démarrer une nouvelle conversation. 🔄"
+        }
+    
+    # Check message limit
+    if session_data['message_count'] >= MAX_MESSAGES_PER_SESSION:
+        session_data['closed'] = True
+        session_data['close_reason'] = 'message_limit'
+        threading.Thread(target=send_conversation_copy, args=(session_id,)).start()
+        return {
+            'limited': True,
+            'reason': 'message_limit',
+            'message': f"Nous avons atteint la limite de {MAX_MESSAGES_PER_SESSION} messages pour cette conversation. 📝 Pour continuer, actualisez la page pour démarrer une nouvelle session. Merci de votre compréhension !"
+        }
+    
+    # Check time limit
+    session_duration = (datetime.now() - session_data['session_start']).total_seconds()
+    if session_duration >= MAX_SESSION_DURATION:
+        session_data['closed'] = True
+        session_data['close_reason'] = 'time_limit'
+        threading.Thread(target=send_conversation_copy, args=(session_id,)).start()
+        return {
+            'limited': True,
+            'reason': 'time_limit',
+            'message': "Notre conversation dure depuis 15 minutes. ⏰ Pour continuer, actualisez la page pour démarrer une nouvelle session. Merci pour cet échange !"
+        }
+    
+    # Warning at 80% of limits
+    messages_remaining = MAX_MESSAGES_PER_SESSION - session_data['message_count']
+    time_remaining = MAX_SESSION_DURATION - session_duration
+    
+    warning = None
+    if messages_remaining == 3:
+        warning = f"⚠️ Il vous reste {messages_remaining} messages dans cette session."
+    elif time_remaining <= 120 and time_remaining > 60:  # 2 minutes left
+        warning = "⚠️ Il reste environ 2 minutes à cette session."
+    
+    return {'limited': False, 'warning': warning}
 
 def check_session_timeout(session_id):
     if session_id not in sessions:
@@ -962,7 +1018,21 @@ def chat():
     session_id = data.get('session_id', str(uuid.uuid4()))
     
     session_data = get_session(session_id)
+    
+    # Check session limits BEFORE processing
+    limit_check = check_session_limits(session_id)
+    if limit_check and limit_check.get('limited'):
+        return jsonify({
+            'response': limit_check['message'],
+            'limited': True,
+            'reason': limit_check['reason'],
+            'session_id': session_id
+        })
+    
     update_session_activity(session_id)
+    
+    # Increment message count
+    session_data['message_count'] += 1
     
     is_continuing = len(session_data['messages']) > 0
     
@@ -1042,7 +1112,20 @@ def chat():
         'timestamp': datetime.now().strftime('%H:%M')
     })
     
-    return jsonify({'response': bot_response, 'language': language, 'session_id': session_id})
+    # Check for warnings after response
+    limit_check = check_session_limits(session_id)
+    warning = limit_check.get('warning') if limit_check else None
+    
+    # Add warning to response if needed
+    if warning:
+        bot_response = bot_response + "\n\n" + warning
+    
+    return jsonify({
+        'response': bot_response, 
+        'language': language, 
+        'session_id': session_id,
+        'messages_remaining': MAX_MESSAGES_PER_SESSION - session_data['message_count']
+    })
 
 # Initialize RAG on startup
 def init_rag():
