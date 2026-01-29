@@ -44,6 +44,181 @@ TIMEOUT_CLOSE = 10 * 60
 MAX_MESSAGES_PER_SESSION = 20
 MAX_SESSION_DURATION = 15 * 60  # 15 minutes
 
+# ==================== LANGUAGE DETECTION & TRANSLATION ====================
+def detect_language(text):
+    """Detect language of the text"""
+    text_lower = text.lower()
+    
+    # Spanish indicators
+    es_words = ['hola', 'gracias', 'por favor', 'qué', 'cuál', 'cómo', 'dónde', 'cuándo', 'tiempo', 'entrega', 
+                'pedido', 'envío', 'precio', 'quiero', 'puedo', 'necesito', 'tengo', 'está', 'son', 'tienen',
+                'buenas', 'buenos', 'días', 'tardes', 'noches', 'el', 'la', 'los', 'las', 'de', 'del']
+    es_count = sum(1 for w in es_words if w in text_lower)
+    
+    # English indicators
+    en_words = ['hello', 'hi', 'thanks', 'please', 'what', 'which', 'how', 'where', 'when', 'delivery', 
+                'order', 'shipping', 'price', 'want', 'can', 'need', 'have', 'is', 'are', 'the', 'a', 'an',
+                'good', 'morning', 'afternoon', 'evening', 'my', 'your', 'do', 'does']
+    en_count = sum(1 for w in en_words if w in text_lower)
+    
+    # German indicators
+    de_words = ['hallo', 'danke', 'bitte', 'was', 'wie', 'wo', 'wann', 'lieferung', 'bestellung', 'versand',
+                'preis', 'ich', 'möchte', 'kann', 'brauche', 'habe', 'ist', 'sind', 'der', 'die', 'das',
+                'guten', 'morgen', 'tag', 'abend', 'mein', 'ihr']
+    de_count = sum(1 for w in de_words if w in text_lower)
+    
+    # Italian indicators
+    it_words = ['ciao', 'grazie', 'per favore', 'cosa', 'quale', 'come', 'dove', 'quando', 'consegna',
+                'ordine', 'spedizione', 'prezzo', 'voglio', 'posso', 'ho bisogno', 'ho', 'è', 'sono',
+                'buongiorno', 'buonasera', 'il', 'la', 'i', 'le', 'di', 'del']
+    it_count = sum(1 for w in it_words if w in text_lower)
+    
+    # Arabic indicators (transliterated common words)
+    ar_indicators = ['مرحبا', 'شكرا', 'من فضلك', 'ماذا', 'كيف', 'أين', 'متى', 'التسليم', 'الطلب']
+    ar_count = sum(1 for w in ar_indicators if w in text)
+    
+    # Find highest score
+    scores = {'es': es_count, 'en': en_count, 'de': de_count, 'it': it_count, 'ar': ar_count}
+    max_lang = max(scores, key=scores.get)
+    max_score = scores[max_lang]
+    
+    # Return detected language if score > 1, else default to French
+    if max_score > 1:
+        return max_lang
+    return 'fr'
+
+def translate_to_french_for_rag(text, source_lang):
+    """Translate common e-commerce terms to French for better RAG matching"""
+    translations = {
+        'es': {
+            'tiempo de entrega': 'délai de livraison',
+            'entrega': 'livraison',
+            'envío': 'livraison expédition',
+            'precio': 'prix',
+            'pedido': 'commande',
+            'pulsera': 'bracelet',
+            'pulseras': 'bracelets',
+            'collar': 'collier',
+            'collares': 'colliers',
+            'anillo': 'bague',
+            'anillos': 'bagues',
+            'pendientes': 'boucles oreilles',
+            'aretes': 'boucles oreilles',
+            'joyería': 'bijoux',
+            'artesanal': 'artisanal',
+            'hecho a mano': 'fait main',
+            'cuánto': 'combien',
+            'cómo': 'comment',
+            'dónde': 'où',
+            'cuándo': 'quand',
+            'qué': 'quoi',
+            'comprar': 'acheter',
+            'devolver': 'retourner',
+            'devolución': 'retour',
+            'pago': 'paiement',
+            'tarjeta': 'carte',
+            'suiza': 'suisse',
+            'internacional': 'international',
+            'gratis': 'gratuit',
+            'gratuito': 'gratuit'
+        },
+        'en': {
+            'delivery time': 'délai de livraison',
+            'delivery': 'livraison',
+            'shipping': 'livraison expédition',
+            'price': 'prix',
+            'order': 'commande',
+            'bracelet': 'bracelet',
+            'bracelets': 'bracelets',
+            'necklace': 'collier',
+            'necklaces': 'colliers',
+            'ring': 'bague',
+            'rings': 'bagues',
+            'earrings': 'boucles oreilles',
+            'jewelry': 'bijoux',
+            'handmade': 'fait main',
+            'artisan': 'artisanal',
+            'how much': 'combien',
+            'how': 'comment',
+            'where': 'où',
+            'when': 'quand',
+            'what': 'quoi',
+            'buy': 'acheter',
+            'return': 'retour',
+            'payment': 'paiement',
+            'card': 'carte',
+            'switzerland': 'suisse',
+            'international': 'international',
+            'free': 'gratuit'
+        },
+        'de': {
+            'lieferzeit': 'délai de livraison',
+            'lieferung': 'livraison',
+            'versand': 'livraison expédition',
+            'preis': 'prix',
+            'bestellung': 'commande',
+            'armband': 'bracelet',
+            'armbänder': 'bracelets',
+            'halskette': 'collier',
+            'kette': 'collier',
+            'ring': 'bague',
+            'ohrringe': 'boucles oreilles',
+            'schmuck': 'bijoux',
+            'handgemacht': 'fait main',
+            'wie viel': 'combien',
+            'wie': 'comment',
+            'wo': 'où',
+            'wann': 'quand',
+            'was': 'quoi',
+            'kaufen': 'acheter',
+            'rückgabe': 'retour',
+            'zahlung': 'paiement',
+            'karte': 'carte',
+            'schweiz': 'suisse',
+            'international': 'international',
+            'kostenlos': 'gratuit'
+        },
+        'it': {
+            'tempo di consegna': 'délai de livraison',
+            'consegna': 'livraison',
+            'spedizione': 'livraison expédition',
+            'prezzo': 'prix',
+            'ordine': 'commande',
+            'bracciale': 'bracelet',
+            'bracciali': 'bracelets',
+            'collana': 'collier',
+            'collane': 'colliers',
+            'anello': 'bague',
+            'anelli': 'bagues',
+            'orecchini': 'boucles oreilles',
+            'gioielli': 'bijoux',
+            'fatto a mano': 'fait main',
+            'artigianale': 'artisanal',
+            'quanto': 'combien',
+            'come': 'comment',
+            'dove': 'où',
+            'quando': 'quand',
+            'cosa': 'quoi',
+            'comprare': 'acheter',
+            'reso': 'retour',
+            'pagamento': 'paiement',
+            'carta': 'carte',
+            'svizzera': 'suisse',
+            'internazionale': 'international',
+            'gratuito': 'gratuit'
+        }
+    }
+    
+    if source_lang not in translations:
+        return text
+    
+    translated = text.lower()
+    for source_term, french_term in translations[source_lang].items():
+        translated = translated.replace(source_term, french_term)
+    
+    # Also keep original text for combined search
+    return f"{translated} {text}"
+
 # ==================== DYNAMIC RAG ====================
 class DynamicRAG:
     def __init__(self):
@@ -753,14 +928,34 @@ EMAIL DU CLIENT TROUVÉ DANS HUBSPOT:
 
 Tu dois RÉPONDRE à cette question en utilisant les informations du CONTEXTE ci-dessous."""
 
+    # Instructions de langue
+    language_instruction = f"""
+LANGUE DE RÉPONSE: {language}
+Tu dois TOUJOURS répondre dans la même langue que le message du visiteur.
+- Si le visiteur écrit en français, réponds en français
+- Si le visiteur écrit en espagnol, réponds en espagnol
+- Si le visiteur écrit en anglais, réponds en anglais
+- Si le visiteur écrit en allemand, réponds en allemand
+- Si le visiteur écrit en italien, réponds en italien
+- Etc. pour toutes les langues
+
+Adapte tes expressions naturelles à la langue:
+- Français: "Hmm...", "Voyons voir...", "Ah !"
+- Espagnol: "Mmm...", "Veamos...", "¡Ah!"
+- Anglais: "Hmm...", "Let me see...", "Ah!"
+- Allemand: "Hmm...", "Mal sehen...", "Ah!"
+"""
+
     return f"""Tu es Taiyari, l'assistant virtuel de Marakame, une boutique suisse de bijoux et accessoires artisanaux faits main.
+
+{language_instruction}
 
 PERSONNALITÉ:
 - Chaleureux, amical et professionnel
-- Expressions naturelles: "Hmm...", "Voyons voir...", "Ah !"
+- Expressions naturelles adaptées à la langue du visiteur
 - Concis: 2-3 phrases max pour les réponses simples
 - Emojis avec parcimonie (1-2 max)
-- Vouvoie les clients
+- Vouvoie les clients (ou équivalent formel dans la langue)
 
 RÈGLES STRICTES:
 1. NE JAMAIS utiliser le mot "Huichol"
@@ -771,6 +966,7 @@ RÈGLES STRICTES:
 6. Ne rediriger vers info@marakame.ch QUE si la réponse n'est PAS dans le contexte
 7. Pour les commandes, demande le numéro ou l'email si non fourni
 8. Inclure les liens URL des sources quand pertinent
+9. TOUJOURS répondre dans la MÊME LANGUE que le visiteur
 {hubspot_instruction}
 
 CONTEXTE (données du site, produits Shopify, FAQ):
@@ -1042,11 +1238,13 @@ def chat():
         'timestamp': datetime.now().strftime('%H:%M')
     })
     
-    # Detect language
-    language = 'fr'
-    en_words = ['hello', 'hi', 'thanks', 'order', 'delivery', 'how', 'when', 'where', 'what', 'my', 'the']
-    if sum(1 for w in en_words if w in user_message.lower()) > 2:
-        language = 'en'
+    # Detect language more comprehensively
+    language = detect_language(user_message)
+    
+    # Translate query to French for RAG search if not French
+    search_query = user_message
+    if language != 'fr':
+        search_query = translate_to_french_for_rag(user_message, language)
     
     # Check for email in message
     email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', user_message)
@@ -1074,8 +1272,8 @@ def chat():
     if email_match and not order_info:
         order_info = get_shopify_order(email_match.group())
     
-    # RAG search
-    context_docs = rag.search(user_message, top_k=5)
+    # RAG search - use translated query for better matching
+    context_docs = rag.search(search_query, top_k=5)
     context_parts = []
     for doc in context_docs:
         source = f"[{doc['source'].upper()}]" if doc.get('source') else ""
