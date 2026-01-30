@@ -94,6 +94,7 @@ def translate_to_french_for_rag(text, source_lang):
             'tiempo de entrega': 'délai de livraison',
             'entrega': 'livraison',
             'envío': 'livraison expédition',
+            'envio': 'livraison expédition',
             'precio': 'prix',
             'pedido': 'commande',
             'pulsera': 'bracelet',
@@ -118,9 +119,19 @@ def translate_to_french_for_rag(text, source_lang):
             'pago': 'paiement',
             'tarjeta': 'carte',
             'suiza': 'suisse',
+            'españa': 'espagne europe international',
+            'spain': 'espagne europe international',
+            'mexico': 'mexique international',
+            'méxico': 'mexique international',
+            'estados unidos': 'usa international',
+            'francia': 'france europe',
+            'alemania': 'allemagne europe',
+            'italia': 'italie europe',
             'internacional': 'international',
             'gratis': 'gratuit',
-            'gratuito': 'gratuit'
+            'gratuito': 'gratuit',
+            'hacen': 'font faire',
+            'entregas': 'livraisons livraison'
         },
         'en': {
             'delivery time': 'délai de livraison',
@@ -485,38 +496,59 @@ Disponible sur: {product_url}"""
         """Static FAQ with essential information that must always be available"""
         return [
             {
-                'content': """DÉLAIS DE LIVRAISON / DELIVERY TIME / TIEMPO DE ENTREGA:
-- Suisse: 1-3 jours ouvrables (CHF 7.90, gratuit dès CHF 80)
-- France: 5-10 jours ouvrables (livraison internationale)
-- Europe: 5-10 jours ouvrables
-- International (hors Europe): 10-15 jours ouvrables
-Les commandes sont expédiées sous 24-48h après validation du paiement.
-Livraison gratuite en Suisse dès CHF 80 d'achat.""",
+                'content': """DÉLAIS DE LIVRAISON / DELIVERY TIME / TIEMPO DE ENTREGA / LIEFERZEIT:
+
+SUISSE (Switzerland/Suiza/Schweiz):
+- Délai: 1-3 jours ouvrables
+- Frais: CHF 7.90 (GRATUIT dès CHF 80 d'achat)
+
+FRANCE:
+- Délai: 5-10 jours ouvrables
+- Livraison internationale standard
+
+EUROPE (Allemagne, Espagne, Italie, Belgique, Pays-Bas, Autriche, Portugal, etc.):
+- Délai: 5-10 jours ouvrables
+- Livraison internationale standard
+- Inclut: Germany/Deutschland, Spain/España, Italy/Italia, Belgium/Belgique, Netherlands, Austria/Österreich, Portugal, etc.
+
+INTERNATIONAL (USA, Canada, Mexique, Amérique latine, Asie, Afrique, Océanie, tous autres pays):
+- Délai: 10-15 jours ouvrables
+- Livraison internationale
+- Inclut: United States, Mexico/México, Brazil/Brasil, Argentina, Colombia, Chile, Japon, Chine, Australie, etc.
+
+IMPORTANT: Toutes les commandes sont expédiées sous 24-48h après validation du paiement.
+Nous livrons dans le monde entier / We ship worldwide / Enviamos a todo el mundo / Wir liefern weltweit.""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/faq'
             },
             {
-                'content': """MÉTHODES DE PAIEMENT / PAYMENT METHODS / MÉTODOS DE PAGO:
+                'content': """MÉTHODES DE PAIEMENT / PAYMENT METHODS / MÉTODOS DE PAGO / ZAHLUNGSMETHODEN:
 - Carte de crédit (Visa, Mastercard, American Express)
 - PayPal
-- TWINT (Suisse uniquement)
-- Virement bancaire
-Toutes les transactions sont sécurisées et cryptées.""",
+- TWINT (Suisse uniquement / Switzerland only / Solo Suiza)
+- Virement bancaire / Bank transfer / Transferencia bancaria
+Toutes les transactions sont sécurisées et cryptées.
+All transactions are secure and encrypted.
+Todas las transacciones son seguras y encriptadas.""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/faq'
             },
             {
-                'content': """RETOURS ET ÉCHANGES / RETURNS / DEVOLUCIONES:
-- Retour gratuit sous 14 jours
+                'content': """RETOURS ET ÉCHANGES / RETURNS & EXCHANGES / DEVOLUCIONES Y CAMBIOS / RÜCKGABE:
+- Retour gratuit sous 14 jours / Free returns within 14 days / Devolución gratuita en 14 días
 - Article non porté, dans son emballage d'origine
 - Remboursement sous 5-7 jours ouvrables après réception
-- Pour initier un retour, contactez info@marakame.ch""",
+- Pour initier un retour, contactez info@marakame.ch
+- To initiate a return, contact info@marakame.ch
+- Para iniciar una devolución, contacte info@marakame.ch""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/faq'
             },
             {
-                'content': """À PROPOS DE MARAKAME / ABOUT MARAKAME / SOBRE MARAKAME:
+                'content': """À PROPOS DE MARAKAME / ABOUT MARAKAME / SOBRE MARAKAME / ÜBER MARAKAME:
 Marakame est une boutique suisse spécialisée dans les bijoux et accessoires artisanaux faits main.
+Marakame is a Swiss boutique specializing in handmade artisan jewelry and accessories.
+Marakame es una boutique suiza especializada en joyería y accesorios artesanales hechos a mano.
 Nos bracelets sont créés par des artisans au Mexique, utilisant des techniques traditionnelles transmises de génération en génération.
 Chaque pièce est unique et fabriquée avec amour et savoir-faire.""",
                 'source': 'faq',
@@ -525,15 +557,19 @@ Chaque pièce est unique et fabriquée avec amour et savoir-faire.""",
             {
                 'content': """CONTACT:
 - Email: info@marakame.ch
-- Site web: https://marakame.ch
-- Basé en Suisse
-Pour toute question sur une commande, veuillez fournir votre numéro de commande ou l'email utilisé lors de l'achat.""",
+- Site web / Website / Sitio web: https://marakame.ch
+- Basé en Suisse / Based in Switzerland / Con sede en Suiza
+Pour toute question sur une commande, veuillez fournir votre numéro de commande ou l'email utilisé lors de l'achat.
+For any order questions, please provide your order number or the email used during purchase.
+Para cualquier pregunta sobre un pedido, proporcione su número de pedido o el email utilizado en la compra.""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/contact'
             },
             {
-                'content': """SUIVI DE COMMANDE / ORDER TRACKING / SEGUIMIENTO DE PEDIDO:
+                'content': """SUIVI DE COMMANDE / ORDER TRACKING / SEGUIMIENTO DE PEDIDO / SENDUNGSVERFOLGUNG:
 Une fois votre commande expédiée, vous recevrez un email avec le numéro de suivi.
+Once your order is shipped, you will receive an email with the tracking number.
+Una vez enviado su pedido, recibirá un email con el número de seguimiento.
 Vous pouvez suivre votre colis via le lien fourni dans l'email de confirmation d'expédition.
 Pour toute question sur votre commande, contactez-nous avec votre numéro de commande.""",
                 'source': 'faq',
