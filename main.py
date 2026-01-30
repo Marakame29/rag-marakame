@@ -460,6 +460,10 @@ Disponible sur: {product_url}"""
             self.documents = []
             self.index = defaultdict(list)
             
+            # Add static FAQ first (most important info)
+            static_faq = self.get_static_faq()
+            self.add_documents(static_faq)
+            
             # Scrape website
             website_docs = self.scrape_website()
             self.add_documents(website_docs)
@@ -476,6 +480,66 @@ Disponible sur: {product_url}"""
         
         finally:
             self.is_updating = False
+    
+    def get_static_faq(self):
+        """Static FAQ with essential information that must always be available"""
+        return [
+            {
+                'content': """DÉLAIS DE LIVRAISON / DELIVERY TIME / TIEMPO DE ENTREGA:
+- Suisse: 1-3 jours ouvrables (CHF 7.90, gratuit dès CHF 80)
+- France: 5-10 jours ouvrables (livraison internationale)
+- Europe: 5-10 jours ouvrables
+- International (hors Europe): 10-15 jours ouvrables
+Les commandes sont expédiées sous 24-48h après validation du paiement.
+Livraison gratuite en Suisse dès CHF 80 d'achat.""",
+                'source': 'faq',
+                'url': 'https://marakame.ch/pages/faq'
+            },
+            {
+                'content': """MÉTHODES DE PAIEMENT / PAYMENT METHODS / MÉTODOS DE PAGO:
+- Carte de crédit (Visa, Mastercard, American Express)
+- PayPal
+- TWINT (Suisse uniquement)
+- Virement bancaire
+Toutes les transactions sont sécurisées et cryptées.""",
+                'source': 'faq',
+                'url': 'https://marakame.ch/pages/faq'
+            },
+            {
+                'content': """RETOURS ET ÉCHANGES / RETURNS / DEVOLUCIONES:
+- Retour gratuit sous 14 jours
+- Article non porté, dans son emballage d'origine
+- Remboursement sous 5-7 jours ouvrables après réception
+- Pour initier un retour, contactez info@marakame.ch""",
+                'source': 'faq',
+                'url': 'https://marakame.ch/pages/faq'
+            },
+            {
+                'content': """À PROPOS DE MARAKAME / ABOUT MARAKAME / SOBRE MARAKAME:
+Marakame est une boutique suisse spécialisée dans les bijoux et accessoires artisanaux faits main.
+Nos bracelets sont créés par des artisans au Mexique, utilisant des techniques traditionnelles transmises de génération en génération.
+Chaque pièce est unique et fabriquée avec amour et savoir-faire.""",
+                'source': 'faq',
+                'url': 'https://marakame.ch/pages/about'
+            },
+            {
+                'content': """CONTACT:
+- Email: info@marakame.ch
+- Site web: https://marakame.ch
+- Basé en Suisse
+Pour toute question sur une commande, veuillez fournir votre numéro de commande ou l'email utilisé lors de l'achat.""",
+                'source': 'faq',
+                'url': 'https://marakame.ch/pages/contact'
+            },
+            {
+                'content': """SUIVI DE COMMANDE / ORDER TRACKING / SEGUIMIENTO DE PEDIDO:
+Une fois votre commande expédiée, vous recevrez un email avec le numéro de suivi.
+Vous pouvez suivre votre colis via le lien fourni dans l'email de confirmation d'expédition.
+Pour toute question sur votre commande, contactez-nous avec votre numéro de commande.""",
+                'source': 'faq',
+                'url': 'https://marakame.ch/pages/faq'
+            }
+        ]
     
     def search(self, query, top_k=5):
         """Search the RAG"""
