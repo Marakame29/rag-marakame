@@ -496,60 +496,46 @@ Disponible sur: {product_url}"""
         """Static FAQ with essential information that must always be available"""
         return [
             {
-                'content': """DÉLAIS DE LIVRAISON / DELIVERY TIME / TIEMPO DE ENTREGA / LIEFERZEIT:
+                'content': """DÉLAIS DE LIVRAISON - DELIVERY TIME - TIEMPO DE ENTREGA - LIEFERZEIT:
 
 SUISSE (Switzerland/Suiza/Schweiz):
-- Délai: 1-3 jours ouvrables
+- Délai: 2 à 5 jours ouvrables
 - Frais: CHF 7.90 (GRATUIT dès CHF 80 d'achat)
 
-FRANCE:
-- Délai: 5-10 jours ouvrables
-- Livraison internationale standard
+INTERNATIONAL (tous les autres pays du monde / all other countries / todos los demás países):
+France, Espagne, Allemagne, Italie, USA, Canada, Mexique, Royaume-Uni, Belgique, Pays-Bas, Autriche, Portugal, Japon, Chine, Australie, Brésil, Argentine, Colombie, Chili, et tous les autres pays...
+- Délai: 5 à 10 jours ouvrables
+- Frais de livraison internationale applicables
 
-EUROPE (Allemagne, Espagne, Italie, Belgique, Pays-Bas, Autriche, Portugal, etc.):
-- Délai: 5-10 jours ouvrables
-- Livraison internationale standard
-- Inclut: Germany/Deutschland, Spain/España, Italy/Italia, Belgium/Belgique, Netherlands, Austria/Österreich, Portugal, etc.
-
-INTERNATIONAL (USA, Canada, Mexique, Amérique latine, Asie, Afrique, Océanie, tous autres pays):
-- Délai: 10-15 jours ouvrables
-- Livraison internationale
-- Inclut: United States, Mexico/México, Brazil/Brasil, Argentina, Colombia, Chile, Japon, Chine, Australie, etc.
-
-IMPORTANT: Toutes les commandes sont expédiées sous 24-48h après validation du paiement.
-Nous livrons dans le monde entier / We ship worldwide / Enviamos a todo el mundo / Wir liefern weltweit.""",
+IMPORTANT: 
+- Toutes les commandes sont expédiées sous 24-48h après validation du paiement
+- Nous livrons dans le monde entier / We ship worldwide / Enviamos a todo el mundo""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/faq'
             },
             {
-                'content': """MÉTHODES DE PAIEMENT / PAYMENT METHODS / MÉTODOS DE PAGO / ZAHLUNGSMETHODEN:
+                'content': """MÉTHODES DE PAIEMENT - PAYMENT METHODS - MÉTODOS DE PAGO:
 - Carte de crédit (Visa, Mastercard, American Express)
 - PayPal
-- TWINT (Suisse uniquement / Switzerland only / Solo Suiza)
-- Virement bancaire / Bank transfer / Transferencia bancaria
-Toutes les transactions sont sécurisées et cryptées.
-All transactions are secure and encrypted.
-Todas las transacciones son seguras y encriptadas.""",
+- TWINT (Suisse uniquement)
+- Virement bancaire
+Toutes les transactions sont sécurisées et cryptées.""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/faq'
             },
             {
-                'content': """RETOURS ET ÉCHANGES / RETURNS & EXCHANGES / DEVOLUCIONES Y CAMBIOS / RÜCKGABE:
-- Retour gratuit sous 14 jours / Free returns within 14 days / Devolución gratuita en 14 días
+                'content': """RETOURS ET ÉCHANGES - RETURNS - DEVOLUCIONES:
+- Retour gratuit sous 14 jours
 - Article non porté, dans son emballage d'origine
 - Remboursement sous 5-7 jours ouvrables après réception
-- Pour initier un retour, contactez info@marakame.ch
-- To initiate a return, contact info@marakame.ch
-- Para iniciar una devolución, contacte info@marakame.ch""",
+- Pour initier un retour: info@marakame.ch""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/faq'
             },
             {
-                'content': """À PROPOS DE MARAKAME / ABOUT MARAKAME / SOBRE MARAKAME / ÜBER MARAKAME:
+                'content': """À PROPOS DE MARAKAME - ABOUT - SOBRE NOSOTROS:
 Marakame est une boutique suisse spécialisée dans les bijoux et accessoires artisanaux faits main.
-Marakame is a Swiss boutique specializing in handmade artisan jewelry and accessories.
-Marakame es una boutique suiza especializada en joyería y accesorios artesanales hechos a mano.
-Nos bracelets sont créés par des artisans au Mexique, utilisant des techniques traditionnelles transmises de génération en génération.
+Nos bracelets sont créés par des artisans au Mexique, utilisant des techniques traditionnelles.
 Chaque pièce est unique et fabriquée avec amour et savoir-faire.""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/about'
@@ -557,21 +543,16 @@ Chaque pièce est unique et fabriquée avec amour et savoir-faire.""",
             {
                 'content': """CONTACT:
 - Email: info@marakame.ch
-- Site web / Website / Sitio web: https://marakame.ch
-- Basé en Suisse / Based in Switzerland / Con sede en Suiza
-Pour toute question sur une commande, veuillez fournir votre numéro de commande ou l'email utilisé lors de l'achat.
-For any order questions, please provide your order number or the email used during purchase.
-Para cualquier pregunta sobre un pedido, proporcione su número de pedido o el email utilizado en la compra.""",
+- Site web: https://marakame.ch
+- Basé en Suisse
+Pour toute question sur une commande, fournir le numéro de commande ou l'email utilisé.""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/contact'
             },
             {
-                'content': """SUIVI DE COMMANDE / ORDER TRACKING / SEGUIMIENTO DE PEDIDO / SENDUNGSVERFOLGUNG:
-Une fois votre commande expédiée, vous recevrez un email avec le numéro de suivi.
-Once your order is shipped, you will receive an email with the tracking number.
-Una vez enviado su pedido, recibirá un email con el número de seguimiento.
-Vous pouvez suivre votre colis via le lien fourni dans l'email de confirmation d'expédition.
-Pour toute question sur votre commande, contactez-nous avec votre numéro de commande.""",
+                'content': """SUIVI DE COMMANDE - ORDER TRACKING - SEGUIMIENTO:
+Une fois la commande expédiée, vous recevrez un email avec le numéro de suivi.
+Suivez votre colis via le lien dans l'email de confirmation d'expédition.""",
                 'source': 'faq',
                 'url': 'https://marakame.ch/pages/faq'
             }
@@ -1028,31 +1009,26 @@ EMAIL DU CLIENT TROUVÉ DANS HUBSPOT:
 
 Tu dois RÉPONDRE à cette question en utilisant les informations du CONTEXTE ci-dessous."""
 
-    # Instructions de langue
-    language_instruction = f"""
-LANGUE DE RÉPONSE: {language}
-Tu dois TOUJOURS répondre dans la même langue que le message du visiteur.
-- Si le visiteur écrit en français, réponds en français
-- Si le visiteur écrit en espagnol, réponds en espagnol
-- Si le visiteur écrit en anglais, réponds en anglais
-- Si le visiteur écrit en allemand, réponds en allemand
-- Si le visiteur écrit en italien, réponds en italien
-- Etc. pour toutes les langues
-
-Adapte tes expressions naturelles à la langue:
-- Français: "Hmm...", "Voyons voir...", "Ah !"
-- Espagnol: "Mmm...", "Veamos...", "¡Ah!"
-- Anglais: "Hmm...", "Let me see...", "Ah!"
-- Allemand: "Hmm...", "Mal sehen...", "Ah!"
-"""
-
     return f"""Tu es Taiyari, l'assistant virtuel de Marakame, une boutique suisse de bijoux et accessoires artisanaux faits main.
 
-{language_instruction}
+RÈGLE ABSOLUE DE LANGUE:
+- Tu dois répondre UNIQUEMENT dans la langue du message du visiteur
+- NE JAMAIS mélanger les langues
+- NE JAMAIS commenter ou mentionner la langue utilisée par le visiteur
+- NE JAMAIS écrire "Je vois que vous écrivez en..." ou similaire
+- Si le visiteur écrit en arabe, réponds ENTIÈREMENT en arabe
+- Si le visiteur écrit en espagnol, réponds ENTIÈREMENT en espagnol
+- Etc.
+
+RÈGLE DE LIVRAISON:
+- Si le client demande une livraison pour la SUISSE: délai de 2 à 5 jours ouvrables
+- Si le client demande une livraison pour N'IMPORTE QUEL AUTRE PAYS du monde (France, Espagne, USA, Mexique, Allemagne, Japon, etc.): c'est considéré comme INTERNATIONAL avec un délai de 5 à 10 jours ouvrables
+- Ne demande PAS le pays si le client l'a déjà mentionné dans sa question
+- Utilise les informations de la FAQ pour les détails supplémentaires
 
 PERSONNALITÉ:
 - Chaleureux, amical et professionnel
-- Expressions naturelles adaptées à la langue du visiteur
+- Expressions naturelles adaptées à la langue (ex: "Hmm..." en français, "Mmm..." en espagnol)
 - Concis: 2-3 phrases max pour les réponses simples
 - Emojis avec parcimonie (1-2 max)
 - Vouvoie les clients (ou équivalent formel dans la langue)
@@ -1066,7 +1042,6 @@ RÈGLES STRICTES:
 6. Ne rediriger vers info@marakame.ch QUE si la réponse n'est PAS dans le contexte
 7. Pour les commandes, demande le numéro ou l'email si non fourni
 8. Inclure les liens URL des sources quand pertinent
-9. TOUJOURS répondre dans la MÊME LANGUE que le visiteur
 {hubspot_instruction}
 
 CONTEXTE (données du site, produits Shopify, FAQ):
