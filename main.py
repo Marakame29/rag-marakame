@@ -45,7 +45,7 @@ MAX_MESSAGES_PER_SESSION = 20
 MAX_SESSION_DURATION = 15 * 60  # 15 minutes
 
 # Dashboard password (change this!)
-DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', 'oTKZLjlKqH8xza')
+DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', 'marakame2024')
 
 # ==================== BLOCKED COUNTRIES ====================
 BLOCKED_COUNTRIES = ['IN', 'PK', 'BD', 'NG', 'CI']  # India, Pakistan, Bangladesh, Nigeria, Côte d'Ivoire
@@ -55,10 +55,20 @@ analytics = {
     'daily': defaultdict(lambda: {'visitors': set(), 'messages': 0, 'sessions': 0}),
     'monthly': defaultdict(lambda: {'visitors': set(), 'messages': 0, 'sessions': 0}),
     'blocked_ips': defaultdict(int),  # Count blocked attempts by country
+    'countries': defaultdict(lambda: {'visitors': set(), 'messages': 0}),  # Stats by country
+    'daily_countries': defaultdict(lambda: defaultdict(lambda: {'visitors': set(), 'messages': 0})),  # Daily stats by country
+    'csat': {
+        'ratings': [],  # List of {timestamp, rating, session_id, country}
+        'daily': defaultdict(lambda: {'1': 0, '2': 0, '3': 0}),  # Daily CSAT counts
+        'total': {'1': 0, '2': 0, '3': 0}  # Total CSAT counts
+    },
     'total_visitors': set(),
     'total_messages': 0,
     'total_sessions': 0
 }
+
+# Cache for IP to country mapping (avoid repeated API calls)
+ip_country_cache = {}
 
 def get_client_ip():
     """Get the real client IP address"""
@@ -72,27 +82,35 @@ def get_client_ip():
     return request.remote_addr
 
 def get_country_from_ip(ip):
-    """Get country code from IP using free API"""
+    """Get country code and name from IP using free API"""
+    if ip in ip_country_cache:
+        return ip_country_cache[ip]
+    
     try:
         # Use ip-api.com (free, no key required, 45 requests/minute)
-        response = requests.get(f'http://ip-api.com/json/{ip}?fields=countryCode', timeout=2)
+        response = requests.get(f'http://ip-api.com/json/{ip}?fields=countryCode,country', timeout=2)
         if response.status_code == 200:
             data = response.json()
-            return data.get('countryCode', '')
+            result = {
+                'code': data.get('countryCode', 'XX'),
+                'name': data.get('country', 'Unknown')
+            }
+            ip_country_cache[ip] = result
+            return result
     except:
         pass
-    return ''
+    return {'code': 'XX', 'name': 'Unknown'}
 
 def is_ip_blocked(ip):
     """Check if IP is from a blocked country"""
     if ip in ['127.0.0.1', 'localhost', '::1']:
         return False  # Allow localhost
     
-    country = get_country_from_ip(ip)
-    if country in BLOCKED_COUNTRIES:
+    country_data = get_country_from_ip(ip)
+    if country_data['code'] in BLOCKED_COUNTRIES:
         # Track blocked attempts
         today = datetime.now().strftime('%Y-%m-%d')
-        analytics['blocked_ips'][f"{today}_{country}"] += 1
+        analytics['blocked_ips'][f"{today}_{country_data['code']}"] += 1
         return True
     return False
 
@@ -101,6 +119,10 @@ def track_visitor(ip, session_id):
     today = datetime.now().strftime('%Y-%m-%d')
     month = datetime.now().strftime('%Y-%m')
     
+    # Get country
+    country_data = get_country_from_ip(ip)
+    country_name = country_data['name']
+    
     # Track daily
     analytics['daily'][today]['visitors'].add(ip)
     analytics['daily'][today]['messages'] += 1
@@ -108,6 +130,14 @@ def track_visitor(ip, session_id):
     # Track monthly
     analytics['monthly'][month]['visitors'].add(ip)
     analytics['monthly'][month]['messages'] += 1
+    
+    # Track by country (total)
+    analytics['countries'][country_name]['visitors'].add(ip)
+    analytics['countries'][country_name]['messages'] += 1
+    
+    # Track by country (daily)
+    analytics['daily_countries'][today][country_name]['visitors'].add(ip)
+    analytics['daily_countries'][today][country_name]['messages'] += 1
     
     # Track total
     analytics['total_visitors'].add(ip)
@@ -121,6 +151,30 @@ def track_new_session(ip):
     analytics['daily'][today]['sessions'] += 1
     analytics['monthly'][month]['sessions'] += 1
     analytics['total_sessions'] += 1
+
+def track_csat(rating, session_id, ip):
+    """Track CSAT rating"""
+    today = datetime.now().strftime('%Y-%m-%d')
+    country_data = get_country_from_ip(ip)
+    
+    rating_str = str(rating)
+    
+    # Store detailed rating
+    analytics['csat']['ratings'].append({
+        'timestamp': datetime.now().isoformat(),
+        'rating': rating,
+        'session_id': session_id,
+        'country': country_data['name'],
+        'date': today
+    })
+    
+    # Update daily counts
+    if rating_str in analytics['csat']['daily'][today]:
+        analytics['csat']['daily'][today][rating_str] += 1
+    
+    # Update total counts
+    if rating_str in analytics['csat']['total']:
+        analytics['csat']['total'][rating_str] += 1
 
 # ==================== LANGUAGE DETECTION & TRANSLATION ====================
 def detect_language(text):
@@ -1336,16 +1390,41 @@ def check_timeout_endpoint():
 def end_chat():
     data = request.json
     session_id = data.get('session_id')
+    send_copy = data.get('send_copy', False)
+    visitor_email = data.get('visitor_email')
     
     if session_id and session_id in sessions:
         sessions[session_id]['closed'] = True
-        threading.Thread(target=send_conversation_copy, args=(session_id,)).start()
+        
+        # Update visitor email if provided
+        if visitor_email:
+            sessions[session_id]['visitor_email'] = visitor_email
+        
+        # Send email copy only if requested
+        if send_copy and sessions[session_id].get('visitor_email'):
+            threading.Thread(target=send_conversation_copy, args=(session_id,)).start()
+        
         return jsonify({
             'success': True, 
-            'message': 'Merci pour cette conversation ! 😊 Une copie a été envoyée par email. N\'hésitez pas à revenir si vous avez d\'autres questions. À bientôt ! 👋'
+            'message': 'Conversation terminée'
         })
     
     return jsonify({'success': False, 'message': 'Session non trouvée'})
+
+@app.route('/csat', methods=['POST'])
+def submit_csat():
+    """Submit CSAT rating"""
+    data = request.json
+    session_id = data.get('session_id')
+    rating = data.get('rating')  # 1, 2, or 3
+    
+    if not rating or rating not in [1, 2, 3]:
+        return jsonify({'success': False, 'message': 'Invalid rating'}), 400
+    
+    client_ip = get_client_ip()
+    track_csat(rating, session_id, client_ip)
+    
+    return jsonify({'success': True, 'message': 'Merci pour votre évaluation !'})
 
 @app.route('/test-email', methods=['POST'])
 def test_email():
@@ -1566,14 +1645,48 @@ def dashboard():
     # Blocked IPs stats
     blocked_today = sum(v for k, v in analytics['blocked_ips'].items() if k.startswith(today))
     
+    # Country stats (top 10)
+    country_stats = []
+    for country, data in analytics['countries'].items():
+        visitor_count = len(data['visitors']) if isinstance(data['visitors'], set) else data['visitors']
+        country_stats.append({
+            'country': country,
+            'visitors': visitor_count,
+            'messages': data['messages']
+        })
+    country_stats.sort(key=lambda x: x['visitors'], reverse=True)
+    top_countries = country_stats[:10]
+    
+    # CSAT stats
+    csat_total = analytics['csat']['total']
+    csat_count = csat_total['1'] + csat_total['2'] + csat_total['3']
+    csat_avg = 0
+    if csat_count > 0:
+        csat_avg = round((csat_total['1'] * 1 + csat_total['2'] * 2 + csat_total['3'] * 3) / csat_count, 2)
+    
+    # CSAT today
+    csat_today = analytics['csat']['daily'].get(today, {'1': 0, '2': 0, '3': 0})
+    csat_today_count = csat_today['1'] + csat_today['2'] + csat_today['3']
+    csat_today_avg = 0
+    if csat_today_count > 0:
+        csat_today_avg = round((csat_today['1'] * 1 + csat_today['2'] * 2 + csat_today['3'] * 3) / csat_today_count, 2)
+    
     # Generate chart data
-    chart_labels = json.dumps([d['date'][-5:] for d in last_7_days])  # MM-DD format
+    chart_labels = json.dumps([d['date'][-5:] for d in last_7_days])
     chart_visitors = json.dumps([d['visitors'] for d in last_7_days])
     chart_messages = json.dumps([d['messages'] for d in last_7_days])
     
     month_labels = json.dumps([d['month'] for d in last_6_months])
     month_visitors_data = json.dumps([d['visitors'] for d in last_6_months])
     month_messages_data = json.dumps([d['messages'] for d in last_6_months])
+    
+    # Country chart data
+    country_labels = json.dumps([c['country'][:15] for c in top_countries])
+    country_visitors_data = json.dumps([c['visitors'] for c in top_countries])
+    
+    # CSAT chart data
+    csat_labels = json.dumps(['😞 Mauvais', '😐 Satisfaisant', '😊 Excellent'])
+    csat_data = json.dumps([csat_total['1'], csat_total['2'], csat_total['3']])
     
     return f'''
     <!DOCTYPE html>
@@ -1588,24 +1701,27 @@ def dashboard():
             .header {{ background: linear-gradient(135deg, #2d8f7b 0%, #20b2aa 100%); color: white; padding: 30px; border-radius: 15px; margin-bottom: 30px; }}
             .header h1 {{ font-size: 2rem; margin-bottom: 10px; }}
             .header p {{ opacity: 0.9; }}
-            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }}
-            .stat-card {{ background: white; padding: 25px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            .stat-card h3 {{ color: #666; font-size: 0.9rem; margin-bottom: 10px; }}
-            .stat-card .value {{ font-size: 2.5rem; font-weight: bold; color: #2d8f7b; }}
-            .stat-card .subtitle {{ color: #999; font-size: 0.8rem; margin-top: 5px; }}
+            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; margin-bottom: 30px; }}
+            .stat-card {{ background: white; padding: 20px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            .stat-card h3 {{ color: #666; font-size: 0.85rem; margin-bottom: 8px; }}
+            .stat-card .value {{ font-size: 2rem; font-weight: bold; color: #2d8f7b; }}
+            .stat-card .subtitle {{ color: #999; font-size: 0.75rem; margin-top: 5px; }}
             .stat-card.blocked .value {{ color: #dc2626; }}
-            .charts {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; margin-bottom: 30px; }}
+            .stat-card.csat .value {{ color: #f59e0b; }}
+            .charts {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 30px; }}
             .chart-card {{ background: white; padding: 25px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            .chart-card h3 {{ margin-bottom: 20px; color: #333; }}
-            .table-card {{ background: white; padding: 25px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow-x: auto; }}
+            .chart-card h3 {{ margin-bottom: 20px; color: #333; font-size: 1rem; }}
+            .table-card {{ background: white; padding: 25px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow-x: auto; margin-bottom: 20px; }}
             table {{ width: 100%; border-collapse: collapse; }}
-            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #eee; }}
+            th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.9rem; }}
             th {{ background: #f8f9fa; font-weight: 600; }}
             .refresh-btn {{ background: #2d8f7b; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; float: right; }}
             .refresh-btn:hover {{ background: #1a6b5a; }}
+            .section-title {{ font-size: 1.2rem; margin: 30px 0 20px 0; color: #333; }}
+            .stars {{ color: #f59e0b; }}
             @media (max-width: 600px) {{
                 .charts {{ grid-template-columns: 1fr; }}
-                .stat-card .value {{ font-size: 2rem; }}
+                .stat-card .value {{ font-size: 1.5rem; }}
             }}
         </style>
     </head>
@@ -1637,38 +1753,101 @@ def dashboard():
                 <div class="value">{month_messages}</div>
                 <div class="subtitle">{round(month_messages/max(month_visitors,1), 1)} msg/visiteur</div>
             </div>
+            <div class="stat-card csat">
+                <h3>⭐ CSAT Aujourd'hui</h3>
+                <div class="value">{csat_today_avg}/3</div>
+                <div class="subtitle">{csat_today_count} évaluations</div>
+            </div>
+            <div class="stat-card csat">
+                <h3>⭐ CSAT Global</h3>
+                <div class="value">{csat_avg}/3</div>
+                <div class="subtitle">{csat_count} évaluations totales</div>
+            </div>
             <div class="stat-card blocked">
                 <h3>🚫 Bloqués aujourd'hui</h3>
                 <div class="value">{blocked_today}</div>
-                <div class="subtitle">IPs des pays bloqués</div>
+                <div class="subtitle">IPs pays bloqués</div>
             </div>
         </div>
         
         <div class="charts">
             <div class="chart-card">
-                <h3>📈 Visiteurs - 7 derniers jours</h3>
+                <h3>📈 Activité - 7 derniers jours</h3>
                 <canvas id="dailyChart"></canvas>
             </div>
             <div class="chart-card">
-                <h3>📊 Visiteurs - 6 derniers mois</h3>
+                <h3>📊 Activité - 6 derniers mois</h3>
                 <canvas id="monthlyChart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>🌍 Top 10 Pays</h3>
+                <canvas id="countryChart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>⭐ Satisfaction Client (CSAT)</h3>
+                <canvas id="csatChart"></canvas>
             </div>
         </div>
         
-        <div class="table-card">
-            <h3 style="margin-bottom: 20px;">📋 Détails des 7 derniers jours</h3>
+        <h2 class="section-title">📋 Détails</h2>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px;">
+            <div class="table-card">
+                <h3 style="margin-bottom: 15px;">📅 7 derniers jours</h3>
+                <table>
+                    <thead>
+                        <tr><th>Date</th><th>Visiteurs</th><th>Messages</th><th>Msg/Vis</th></tr>
+                    </thead>
+                    <tbody>
+                        {"".join(f'<tr><td>{d["date"]}</td><td>{d["visitors"]}</td><td>{d["messages"]}</td><td>{round(d["messages"]/max(d["visitors"],1), 1)}</td></tr>' for d in reversed(last_7_days))}
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="table-card">
+                <h3 style="margin-bottom: 15px;">🌍 Visiteurs par pays</h3>
+                <table>
+                    <thead>
+                        <tr><th>Pays</th><th>Visiteurs</th><th>Messages</th></tr>
+                    </thead>
+                    <tbody>
+                        {"".join(f'<tr><td>{c["country"]}</td><td>{c["visitors"]}</td><td>{c["messages"]}</td></tr>' for c in top_countries) if top_countries else '<tr><td colspan="3">Aucune donnée</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="table-card" style="margin-top: 20px;">
+            <h3 style="margin-bottom: 15px;">⭐ Détail CSAT</h3>
             <table>
                 <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Visiteurs</th>
-                        <th>Sessions</th>
-                        <th>Messages</th>
-                        <th>Msg/Visiteur</th>
-                    </tr>
+                    <tr><th>Note</th><th>Aujourd'hui</th><th>Total</th><th>%</th></tr>
                 </thead>
                 <tbody>
-                    {"".join(f'<tr><td>{d["date"]}</td><td>{d["visitors"]}</td><td>{d["sessions"]}</td><td>{d["messages"]}</td><td>{round(d["messages"]/max(d["visitors"],1), 1)}</td></tr>' for d in reversed(last_7_days))}
+                    <tr>
+                        <td>😞 1 - Mauvais</td>
+                        <td>{csat_today['1']}</td>
+                        <td>{csat_total['1']}</td>
+                        <td>{round(csat_total['1']/max(csat_count,1)*100, 1)}%</td>
+                    </tr>
+                    <tr>
+                        <td>😐 2 - Satisfaisant</td>
+                        <td>{csat_today['2']}</td>
+                        <td>{csat_total['2']}</td>
+                        <td>{round(csat_total['2']/max(csat_count,1)*100, 1)}%</td>
+                    </tr>
+                    <tr>
+                        <td>😊 3 - Excellent</td>
+                        <td>{csat_today['3']}</td>
+                        <td>{csat_total['3']}</td>
+                        <td>{round(csat_total['3']/max(csat_count,1)*100, 1)}%</td>
+                    </tr>
+                    <tr style="font-weight: bold; background: #f8f9fa;">
+                        <td>Total</td>
+                        <td>{csat_today_count}</td>
+                        <td>{csat_count}</td>
+                        <td>Moyenne: {csat_avg}/3</td>
+                    </tr>
                 </tbody>
             </table>
         </div>
@@ -1721,6 +1900,38 @@ def dashboard():
                     responsive: true,
                     plugins: {{ legend: {{ position: 'bottom' }} }},
                     scales: {{ y: {{ beginAtZero: true }} }}
+                }}
+            }});
+            
+            // Country chart
+            new Chart(document.getElementById('countryChart'), {{
+                type: 'doughnut',
+                data: {{
+                    labels: {country_labels},
+                    datasets: [{{
+                        data: {country_visitors_data},
+                        backgroundColor: ['#2d8f7b', '#20b2aa', '#3cb371', '#66cdaa', '#8fbc8f', '#98d8c8', '#b2dfdb', '#c8e6c9', '#dcedc8', '#f1f8e9']
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    plugins: {{ legend: {{ position: 'right', labels: {{ boxWidth: 12 }} }} }}
+                }}
+            }});
+            
+            // CSAT chart
+            new Chart(document.getElementById('csatChart'), {{
+                type: 'doughnut',
+                data: {{
+                    labels: {csat_labels},
+                    datasets: [{{
+                        data: {csat_data},
+                        backgroundColor: ['#ef4444', '#f59e0b', '#22c55e']
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    plugins: {{ legend: {{ position: 'right', labels: {{ boxWidth: 12 }} }} }}
                 }}
             }});
         </script>
