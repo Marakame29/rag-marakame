@@ -44,6 +44,84 @@ TIMEOUT_CLOSE = 10 * 60
 MAX_MESSAGES_PER_SESSION = 20
 MAX_SESSION_DURATION = 15 * 60  # 15 minutes
 
+# Dashboard password (change this!)
+DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', 'marakame2024')
+
+# ==================== BLOCKED COUNTRIES ====================
+BLOCKED_COUNTRIES = ['IN', 'PK', 'BD', 'NG', 'CI']  # India, Pakistan, Bangladesh, Nigeria, Côte d'Ivoire
+
+# ==================== ANALYTICS DATA ====================
+analytics = {
+    'daily': defaultdict(lambda: {'visitors': set(), 'messages': 0, 'sessions': 0}),
+    'monthly': defaultdict(lambda: {'visitors': set(), 'messages': 0, 'sessions': 0}),
+    'blocked_ips': defaultdict(int),  # Count blocked attempts by country
+    'total_visitors': set(),
+    'total_messages': 0,
+    'total_sessions': 0
+}
+
+def get_client_ip():
+    """Get the real client IP address"""
+    # Check for forwarded headers (Railway, Cloudflare, etc.)
+    if request.headers.get('CF-Connecting-IP'):
+        return request.headers.get('CF-Connecting-IP')
+    if request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    if request.headers.get('X-Real-IP'):
+        return request.headers.get('X-Real-IP')
+    return request.remote_addr
+
+def get_country_from_ip(ip):
+    """Get country code from IP using free API"""
+    try:
+        # Use ip-api.com (free, no key required, 45 requests/minute)
+        response = requests.get(f'http://ip-api.com/json/{ip}?fields=countryCode', timeout=2)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('countryCode', '')
+    except:
+        pass
+    return ''
+
+def is_ip_blocked(ip):
+    """Check if IP is from a blocked country"""
+    if ip in ['127.0.0.1', 'localhost', '::1']:
+        return False  # Allow localhost
+    
+    country = get_country_from_ip(ip)
+    if country in BLOCKED_COUNTRIES:
+        # Track blocked attempts
+        today = datetime.now().strftime('%Y-%m-%d')
+        analytics['blocked_ips'][f"{today}_{country}"] += 1
+        return True
+    return False
+
+def track_visitor(ip, session_id):
+    """Track visitor for analytics"""
+    today = datetime.now().strftime('%Y-%m-%d')
+    month = datetime.now().strftime('%Y-%m')
+    
+    # Track daily
+    analytics['daily'][today]['visitors'].add(ip)
+    analytics['daily'][today]['messages'] += 1
+    
+    # Track monthly
+    analytics['monthly'][month]['visitors'].add(ip)
+    analytics['monthly'][month]['messages'] += 1
+    
+    # Track total
+    analytics['total_visitors'].add(ip)
+    analytics['total_messages'] += 1
+
+def track_new_session(ip):
+    """Track new session"""
+    today = datetime.now().strftime('%Y-%m-%d')
+    month = datetime.now().strftime('%Y-%m')
+    
+    analytics['daily'][today]['sessions'] += 1
+    analytics['monthly'][month]['sessions'] += 1
+    analytics['total_sessions'] += 1
+
 # ==================== LANGUAGE DETECTION & TRANSLATION ====================
 def detect_language(text):
     """Detect language of the text"""
@@ -1281,6 +1359,14 @@ def test_email():
 
 @app.route('/chat', methods=['POST'])
 def chat():
+    # Get client IP and check if blocked
+    client_ip = get_client_ip()
+    if is_ip_blocked(client_ip):
+        return jsonify({
+            'error': 'Service not available in your region',
+            'blocked': True
+        }), 403
+    
     if not ANTHROPIC_KEY:
         return jsonify({'error': 'ANTHROPIC_API_KEY not configured'}), 500
     
@@ -1289,6 +1375,13 @@ def chat():
     session_id = data.get('session_id', str(uuid.uuid4()))
     
     session_data = get_session(session_id)
+    
+    # Track if this is a new session
+    if session_data['message_count'] == 0:
+        track_new_session(client_ip)
+    
+    # Track visitor and message
+    track_visitor(client_ip, session_id)
     
     # Check session limits BEFORE processing
     limit_check = check_session_limits(session_id)
@@ -1398,6 +1491,272 @@ def chat():
         'language': language, 
         'session_id': session_id,
         'messages_remaining': MAX_MESSAGES_PER_SESSION - session_data['message_count']
+    })
+
+# ==================== ANALYTICS DASHBOARD ====================
+@app.route('/dashboard')
+def dashboard():
+    """Analytics dashboard - password protected"""
+    password = request.args.get('pwd', '')
+    if password != DASHBOARD_PASSWORD:
+        return '''
+        <!DOCTYPE html>
+        <html>
+        <head><title>Dashboard - Login</title>
+        <style>
+            body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #1a1a2e; margin: 0; }
+            .login { background: white; padding: 40px; border-radius: 10px; text-align: center; }
+            input { padding: 10px; margin: 10px; border: 1px solid #ddd; border-radius: 5px; }
+            button { padding: 10px 20px; background: #2d8f7b; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        </style>
+        </head>
+        <body>
+        <div class="login">
+            <h2>🔒 Dashboard Taiyari</h2>
+            <form method="GET">
+                <input type="password" name="pwd" placeholder="Mot de passe"><br>
+                <button type="submit">Accéder</button>
+            </form>
+        </div>
+        </body>
+        </html>
+        ''', 401
+    
+    # Get current date info
+    today = datetime.now().strftime('%Y-%m-%d')
+    current_month = datetime.now().strftime('%Y-%m')
+    
+    # Get last 7 days data
+    last_7_days = []
+    for i in range(6, -1, -1):
+        day = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+        day_data = analytics['daily'].get(day, {'visitors': set(), 'messages': 0, 'sessions': 0})
+        last_7_days.append({
+            'date': day,
+            'visitors': len(day_data['visitors']) if isinstance(day_data['visitors'], set) else day_data['visitors'],
+            'messages': day_data['messages'],
+            'sessions': day_data['sessions']
+        })
+    
+    # Get last 6 months data
+    last_6_months = []
+    for i in range(5, -1, -1):
+        month_date = datetime.now() - timedelta(days=i*30)
+        month = month_date.strftime('%Y-%m')
+        month_data = analytics['monthly'].get(month, {'visitors': set(), 'messages': 0, 'sessions': 0})
+        last_6_months.append({
+            'month': month,
+            'visitors': len(month_data['visitors']) if isinstance(month_data['visitors'], set) else month_data['visitors'],
+            'messages': month_data['messages'],
+            'sessions': month_data['sessions']
+        })
+    
+    # Today's stats
+    today_data = analytics['daily'].get(today, {'visitors': set(), 'messages': 0, 'sessions': 0})
+    today_visitors = len(today_data['visitors']) if isinstance(today_data['visitors'], set) else today_data['visitors']
+    today_messages = today_data['messages']
+    today_sessions = today_data['sessions']
+    
+    # This month's stats
+    month_data = analytics['monthly'].get(current_month, {'visitors': set(), 'messages': 0, 'sessions': 0})
+    month_visitors = len(month_data['visitors']) if isinstance(month_data['visitors'], set) else month_data['visitors']
+    month_messages = month_data['messages']
+    month_sessions = month_data['sessions']
+    
+    # Blocked IPs stats
+    blocked_today = sum(v for k, v in analytics['blocked_ips'].items() if k.startswith(today))
+    
+    # Generate chart data
+    chart_labels = json.dumps([d['date'][-5:] for d in last_7_days])  # MM-DD format
+    chart_visitors = json.dumps([d['visitors'] for d in last_7_days])
+    chart_messages = json.dumps([d['messages'] for d in last_7_days])
+    
+    month_labels = json.dumps([d['month'] for d in last_6_months])
+    month_visitors_data = json.dumps([d['visitors'] for d in last_6_months])
+    month_messages_data = json.dumps([d['messages'] for d in last_6_months])
+    
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Dashboard Taiyari - Analytics</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }}
+            .header {{ background: linear-gradient(135deg, #2d8f7b 0%, #20b2aa 100%); color: white; padding: 30px; border-radius: 15px; margin-bottom: 30px; }}
+            .header h1 {{ font-size: 2rem; margin-bottom: 10px; }}
+            .header p {{ opacity: 0.9; }}
+            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }}
+            .stat-card {{ background: white; padding: 25px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            .stat-card h3 {{ color: #666; font-size: 0.9rem; margin-bottom: 10px; }}
+            .stat-card .value {{ font-size: 2.5rem; font-weight: bold; color: #2d8f7b; }}
+            .stat-card .subtitle {{ color: #999; font-size: 0.8rem; margin-top: 5px; }}
+            .stat-card.blocked .value {{ color: #dc2626; }}
+            .charts {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; margin-bottom: 30px; }}
+            .chart-card {{ background: white; padding: 25px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            .chart-card h3 {{ margin-bottom: 20px; color: #333; }}
+            .table-card {{ background: white; padding: 25px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow-x: auto; }}
+            table {{ width: 100%; border-collapse: collapse; }}
+            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #eee; }}
+            th {{ background: #f8f9fa; font-weight: 600; }}
+            .refresh-btn {{ background: #2d8f7b; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; float: right; }}
+            .refresh-btn:hover {{ background: #1a6b5a; }}
+            @media (max-width: 600px) {{
+                .charts {{ grid-template-columns: 1fr; }}
+                .stat-card .value {{ font-size: 2rem; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <button class="refresh-btn" onclick="location.reload()">🔄 Actualiser</button>
+            <h1>📊 Dashboard Taiyari</h1>
+            <p>Analytics du chatbot - Mis à jour: {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>👥 Visiteurs aujourd'hui</h3>
+                <div class="value">{today_visitors}</div>
+                <div class="subtitle">{today_sessions} sessions</div>
+            </div>
+            <div class="stat-card">
+                <h3>💬 Messages aujourd'hui</h3>
+                <div class="value">{today_messages}</div>
+                <div class="subtitle">{round(today_messages/max(today_visitors,1), 1)} msg/visiteur</div>
+            </div>
+            <div class="stat-card">
+                <h3>📅 Visiteurs ce mois</h3>
+                <div class="value">{month_visitors}</div>
+                <div class="subtitle">{month_sessions} sessions</div>
+            </div>
+            <div class="stat-card">
+                <h3>📈 Messages ce mois</h3>
+                <div class="value">{month_messages}</div>
+                <div class="subtitle">{round(month_messages/max(month_visitors,1), 1)} msg/visiteur</div>
+            </div>
+            <div class="stat-card blocked">
+                <h3>🚫 Bloqués aujourd'hui</h3>
+                <div class="value">{blocked_today}</div>
+                <div class="subtitle">IPs des pays bloqués</div>
+            </div>
+        </div>
+        
+        <div class="charts">
+            <div class="chart-card">
+                <h3>📈 Visiteurs - 7 derniers jours</h3>
+                <canvas id="dailyChart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>📊 Visiteurs - 6 derniers mois</h3>
+                <canvas id="monthlyChart"></canvas>
+            </div>
+        </div>
+        
+        <div class="table-card">
+            <h3 style="margin-bottom: 20px;">📋 Détails des 7 derniers jours</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Visiteurs</th>
+                        <th>Sessions</th>
+                        <th>Messages</th>
+                        <th>Msg/Visiteur</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {"".join(f'<tr><td>{d["date"]}</td><td>{d["visitors"]}</td><td>{d["sessions"]}</td><td>{d["messages"]}</td><td>{round(d["messages"]/max(d["visitors"],1), 1)}</td></tr>' for d in reversed(last_7_days))}
+                </tbody>
+            </table>
+        </div>
+        
+        <script>
+            // Daily chart
+            new Chart(document.getElementById('dailyChart'), {{
+                type: 'line',
+                data: {{
+                    labels: {chart_labels},
+                    datasets: [{{
+                        label: 'Visiteurs',
+                        data: {chart_visitors},
+                        borderColor: '#2d8f7b',
+                        backgroundColor: 'rgba(45, 143, 123, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }}, {{
+                        label: 'Messages',
+                        data: {chart_messages},
+                        borderColor: '#20b2aa',
+                        backgroundColor: 'rgba(32, 178, 170, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    plugins: {{ legend: {{ position: 'bottom' }} }},
+                    scales: {{ y: {{ beginAtZero: true }} }}
+                }}
+            }});
+            
+            // Monthly chart
+            new Chart(document.getElementById('monthlyChart'), {{
+                type: 'bar',
+                data: {{
+                    labels: {month_labels},
+                    datasets: [{{
+                        label: 'Visiteurs',
+                        data: {month_visitors_data},
+                        backgroundColor: '#2d8f7b'
+                    }}, {{
+                        label: 'Messages',
+                        data: {month_messages_data},
+                        backgroundColor: '#20b2aa'
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    plugins: {{ legend: {{ position: 'bottom' }} }},
+                    scales: {{ y: {{ beginAtZero: true }} }}
+                }}
+            }});
+        </script>
+    </body>
+    </html>
+    '''
+
+@app.route('/api/analytics')
+def api_analytics():
+    """API endpoint for analytics data (JSON)"""
+    password = request.args.get('pwd', '')
+    if password != DASHBOARD_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    today = datetime.now().strftime('%Y-%m-%d')
+    current_month = datetime.now().strftime('%Y-%m')
+    
+    today_data = analytics['daily'].get(today, {'visitors': set(), 'messages': 0, 'sessions': 0})
+    month_data = analytics['monthly'].get(current_month, {'visitors': set(), 'messages': 0, 'sessions': 0})
+    
+    return jsonify({
+        'today': {
+            'visitors': len(today_data['visitors']) if isinstance(today_data['visitors'], set) else today_data['visitors'],
+            'messages': today_data['messages'],
+            'sessions': today_data['sessions']
+        },
+        'month': {
+            'visitors': len(month_data['visitors']) if isinstance(month_data['visitors'], set) else month_data['visitors'],
+            'messages': month_data['messages'],
+            'sessions': month_data['sessions']
+        },
+        'total': {
+            'visitors': len(analytics['total_visitors']),
+            'messages': analytics['total_messages'],
+            'sessions': analytics['total_sessions']
+        }
     })
 
 # Initialize RAG on startup
