@@ -45,7 +45,7 @@ MAX_MESSAGES_PER_SESSION = 20
 MAX_SESSION_DURATION = 15 * 60  # 15 minutes
 
 # Dashboard password (change this!)
-DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', 'marakame2024')
+DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', 'oTKZLjlKqH8xza')
 
 # ==================== BLOCKED COUNTRIES ====================
 BLOCKED_COUNTRIES = ['IN', 'PK', 'BD', 'NG', 'CI']  # India, Pakistan, Bangladesh, Nigeria, Côte d'Ivoire
